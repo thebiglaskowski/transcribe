@@ -63,21 +63,45 @@ Direct file path mode:
 python transcribe_audio.py /mnt/c/Users/joela/Downloads/example.m4a
 ```
 
-## Downloading videos to transcribe
+## Project mode — download and transcribe URLs
 
-Use `yt-dlp` to extract audio from any video URL before transcribing:
-
-```bash
-yt-dlp -x --audio-format mp3 -o "video.%(ext)s" "https://www.tiktok.com/@user99537255292442/video/7632510655005723934"
-```
-
-Then transcribe the downloaded file:
+Pass one or more video URLs and the script enters project mode: it prompts you for a project name, creates a folder for it, downloads and extracts audio via yt-dlp, then transcribes each video in sequence.
 
 ```bash
-python transcribe_audio.py video.mp3
+python transcribe_audio.py https://youtu.be/abc123 https://youtu.be/def456
 ```
 
-`-x` extracts audio only, `--audio-format mp3` converts to MP3, and `-o "video.%(ext)s"` names the output `video.mp3`. Works with TikTok, YouTube, Instagram, and most other video platforms.
+You will be prompted:
+
+```
+Project name (a folder will be created): my-research
+```
+
+This creates `~/.transcribe/my-research/` and produces:
+
+```
+my-research/my-research1.wav   ← extracted audio (kept for re-transcription)
+my-research/my-research1.txt   ← transcript
+my-research/my-research2.wav
+my-research/my-research2.txt
+...
+```
+
+Works with YouTube, TikTok, Instagram, and any site yt-dlp supports. Requires ffmpeg to be installed (`sudo apt install ffmpeg`).
+
+## Batch transcribe local files
+
+Pass multiple local file paths to transcribe them all in one run without downloading anything:
+
+```bash
+python transcribe_audio.py clip1.wav clip2.m4a clip3.mp4
+```
+
+Transcripts are saved next to each source file. Use `--output-dir` to redirect all output to a single folder:
+
+```bash
+python transcribe_audio.py clip1.wav clip2.m4a --output-dir ./transcripts
+```
 
 ## Common examples
 
