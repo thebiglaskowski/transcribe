@@ -350,6 +350,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Output directory for single-file mode. Defaults to the input file's directory.",
     )
+    parser.add_argument(
+        "--cleanup",
+        action="store_true",
+        default=False,
+        help="Delete audio files after successful transcription.",
+    )
     return parser
 
 
@@ -375,6 +381,14 @@ def run_project_workflow(urls: list[str], args: argparse.Namespace) -> int:
         print(f"[{i}/{len(urls)}] {url}")
         print(f"{'='*60}")
 
+        txt_path = project_dir / f"{stem}.txt"
+        srt_path = (project_dir / f"{stem}.srt") if args.srt else None
+
+        if txt_path.exists() and txt_path.stat().st_size > 0:
+            print(f"  Skipping — transcript already exists: {txt_path.name}")
+            successes += 1
+            continue
+
         try:
             audio_path = download_audio(url, project_dir, stem)
         except Exception as exc:
@@ -382,13 +396,13 @@ def run_project_workflow(urls: list[str], args: argparse.Namespace) -> int:
             failures += 1
             continue
 
-        txt_path = project_dir / f"{stem}.txt"
-        srt_path = (project_dir / f"{stem}.srt") if args.srt else None
-
         try:
             ok = transcribe_file(audio_path, txt_path, srt_path, model, args, info_prefix="  ")
             if ok:
                 successes += 1
+                if args.cleanup:
+                    audio_path.unlink()
+                    print(f"Deleted: {audio_path}")
             else:
                 failures += 1
         except Exception as exc:
@@ -440,10 +454,19 @@ def run_multi_file_workflow(raw_paths: list[str], args: argparse.Namespace) -> i
         output_dir = output_dir_override or audio_path.parent
         txt_path = output_dir / f"{audio_path.stem}.txt"
         srt_path = (output_dir / f"{audio_path.stem}.srt") if args.srt else None
+
+        if txt_path.exists() and txt_path.stat().st_size > 0:
+            print(f"  Skipping — transcript already exists: {txt_path.name}")
+            successes += 1
+            continue
+
         try:
             ok = transcribe_file(audio_path, txt_path, srt_path, model, args, info_prefix="  ")
             if ok:
                 successes += 1
+                if args.cleanup:
+                    audio_path.unlink()
+                    print(f"Deleted: {audio_path}")
             else:
                 failures += 1
         except Exception as exc:
@@ -488,6 +511,9 @@ def run_single_file_workflow(raw_path: str | None, args: argparse.Namespace) -> 
 
     try:
         ok = transcribe_file(audio_path, txt_path, srt_path, model, args)
+        if ok and args.cleanup:
+            audio_path.unlink()
+            print(f"Deleted: {audio_path}")
         return 0 if ok else 1
     except Exception as exc:
         print(f"\nTranscription failed: {exc}")
@@ -506,6 +532,8 @@ def main() -> int:
             if not explicit_model:
                 args.model = prompt_model_menu()
             mode = prompt_mode_menu()
+            cleanup_answer = input("\nDelete audio files after transcription? [y/N] ").strip().lower()
+            args.cleanup = cleanup_answer == "y"
             if mode == "urls":
                 urls = prompt_for_urls()
                 return run_project_workflow(urls, args)
