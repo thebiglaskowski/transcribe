@@ -80,7 +80,7 @@ Project name (a folder will be created): my-research
 This creates `~/.transcribe/my-research/` and produces:
 
 ```
-my-research/my-research1.wav   ← extracted audio (kept for re-transcription)
+my-research/my-research1.wav   ← extracted audio
 my-research/my-research1.txt   ← transcript
 my-research/my-research2.wav
 my-research/my-research2.txt
@@ -97,7 +97,9 @@ Pass multiple local file paths to transcribe them all in one run without downloa
 python transcribe_audio.py clip1.wav clip2.m4a clip3.mp4
 ```
 
-Transcripts are saved next to each source file. Use `--output-dir` to redirect all output to a single folder:
+Transcripts are saved next to each source file. If a transcript already exists for a file it will be skipped, so interrupted batch runs can be safely resumed by re-running the same command.
+
+Use `--output-dir` to redirect all output to a single folder:
 
 ```bash
 python transcribe_audio.py clip1.wav clip2.m4a --output-dir ./transcripts
@@ -139,6 +141,12 @@ Use GPU 1 only:
 
 ```bash
 CUDA_VISIBLE_DEVICES=1 python transcribe_audio.py
+```
+
+Delete audio files after transcription:
+
+```bash
+python transcribe_audio.py --cleanup
 ```
 
 Save output somewhere else:
