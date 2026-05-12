@@ -90,12 +90,13 @@ def download_audio(url: str, project_dir: Path, stem: str) -> Path:
 
     outtmpl = str(project_dir / f"{stem}.%(ext)s")
     ydl_opts = {
-        "format": "bestaudio/best",
+        "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio[ext=opus]/bestaudio/best",
         "outtmpl": outtmpl,
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "wav",
         }],
+        "keepvideo": False,
         "quiet": False,
         "no_warnings": False,
     }
