@@ -1,5 +1,8 @@
+import itertools
 import logging
 import sys
+import threading
+import time
 
 _BAR_WIDTH = 20
 _LABEL_WIDTH = 12
@@ -37,3 +40,33 @@ def finish_bar() -> None:
     if not _should_render():
         return
     print()
+
+
+_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+def spinner_start(msg: str) -> threading.Thread:
+    if not _should_render():
+        t = threading.Thread(target=lambda: None, daemon=True)
+        t.start()
+        return t
+    stop = threading.Event()
+
+    def _spin() -> None:
+        for frame in itertools.cycle(_FRAMES):
+            if stop.is_set():
+                break
+            print(f"\r{frame} {msg}", end="", flush=True)
+            time.sleep(0.08)
+        print("\r" + " " * (len(msg) + 3) + "\r", end="", flush=True)
+
+    t = threading.Thread(target=_spin, daemon=True)
+    t.stop_event = stop  # type: ignore[attr-defined]
+    t.start()
+    return t
+
+
+def spinner_stop(thread: threading.Thread) -> None:
+    if hasattr(thread, "stop_event"):
+        thread.stop_event.set()
+    thread.join(timeout=0.5)

@@ -1,5 +1,6 @@
 import logging
 import sys
+import time
 from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
@@ -301,3 +302,23 @@ def test_finish_bar_silent_when_not_tty(monkeypatch, capsys):
     monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
     finish_bar()
     assert capsys.readouterr().out == ""
+
+
+def test_spinner_stop_noop_thread_does_not_raise():
+    from transcribe.progress import spinner_start, spinner_stop
+
+    # In test environment stdout is not a TTY, so spinner_start returns a no-op thread.
+    thread = spinner_start("Loading...")
+    spinner_stop(thread)
+    assert not thread.is_alive()
+
+
+def test_spinner_stop_live_thread_joins_cleanly(monkeypatch):
+    from transcribe.progress import spinner_start, spinner_stop
+
+    buf = _tty_buf(monkeypatch)
+    thread = spinner_start("Loading model...")
+    time.sleep(0.05)
+    spinner_stop(thread)
+
+    assert not thread.is_alive()
