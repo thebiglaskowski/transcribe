@@ -3,11 +3,11 @@ from pathlib import Path
 from .utils import SUPPORTED_EXTENSIONS, is_url, sanitize_project_name
 
 MODELS = [
-    ("turbo",    "Turbo     — fast, great accuracy (recommended)"),
+    ("turbo", "Turbo     — fast, great accuracy (recommended)"),
     ("large-v3", "Large v3  — highest accuracy, slowest"),
-    ("medium",   "Medium    — balanced speed / accuracy"),
-    ("small",    "Small     — fast, lighter RAM"),
-    ("tiny",     "Tiny      — fastest, lowest accuracy"),
+    ("medium", "Medium    — balanced speed / accuracy"),
+    ("small", "Small     — fast, lighter RAM"),
+    ("tiny", "Tiny      — fastest, lowest accuracy"),
 ]
 
 

@@ -167,3 +167,14 @@ ctypes.CDLL("libcudnn.so.9")
 print("CUDA libraries loaded OK")
 PY
 ```
+
+## Development
+
+```bash
+uv venv --python 3.11
+source .venv/bin/activate
+uv pip install -e ".[dev]"
+pytest
+ruff check src/ tests/
+ruff format src/ tests/
+```

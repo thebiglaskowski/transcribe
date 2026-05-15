@@ -138,7 +138,7 @@ def main() -> int:
     resolve_cuda_libs()
     project_root = Path(args.project_root).expanduser()
 
-    # Resolve --model sentinel: CLI > env > config > interactive menu (only when no inputs) > builtin.
+    # Model sentinel: CLI > env > config > interactive menu (only with no inputs) > builtin.
     cli_supplied_model = args.model is not None
     config_supplied_model = "model" in env_cfg or "model" in file_cfg
 
@@ -151,7 +151,9 @@ def main() -> int:
             mode = prompt_mode_menu()
             default_cleanup = merged["cleanup"]
             prompt_hint = "Y/n" if default_cleanup else "y/N"
-            answer = input(f"\nDelete audio files after transcription? [{prompt_hint}] ").strip().lower()
+            answer = (
+                input(f"\nDelete audio files after transcription? [{prompt_hint}] ").strip().lower()
+            )
             args.cleanup = default_cleanup if not answer else answer == "y"
             if mode == "urls":
                 urls = prompt_for_urls()

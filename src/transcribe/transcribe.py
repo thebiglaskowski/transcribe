@@ -66,16 +66,12 @@ def transcribe_file(
         write_srt(segments, srt_path)
 
     elapsed = time.time() - start_time
-    logger.info(
-        "Language: %s (%.2f) | %.1fs", info.language, info.language_probability, elapsed
-    )
+    logger.info("Language: %s (%.2f) | %.1fs", info.language, info.language_probability, elapsed)
     logger.info("Saved: %s", txt_path)
     return True
 
 
-def run_project_workflow(
-    urls: list[str], args: argparse.Namespace, project_root: Path
-) -> int:
+def run_project_workflow(urls: list[str], args: argparse.Namespace, project_root: Path) -> int:
     project_name, project_dir = prompt_project_name(project_root)
 
     device = default_device() if args.device == "auto" else args.device
