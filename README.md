@@ -1,10 +1,50 @@
+<div align="center">
+
 ![transcribe](assets/transcribe.png)
 
 # transcribe
 
-GPU-aware audio/video transcription with `faster-whisper`. Wraps the Whisper model with a
-CLI that handles single files, batches of local files, and project folders built from
-video URLs (YouTube, TikTok, etc. via `yt-dlp`).
+**GPU-aware audio/video transcription powered by `faster-whisper`**
+
+![Python](https://img.shields.io/badge/python-3.11+-3776ab?logo=python&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-22863a?logo=opensourceinitiative&logoColor=white)
+![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20WSL2-lightgrey?logo=linux&logoColor=white)
+![CUDA](https://img.shields.io/badge/CUDA-auto--detect-76b900?logo=nvidia&logoColor=white)
+
+</div>
+
+---
+
+<table>
+<tr>
+<td>🎙️ <b>Single files, batches, or URLs</b><br>One command handles them all</td>
+<td>⚡ <b>GPU-aware out of the box</b><br>Auto-loads CUDA libs — no <code>LD_LIBRARY_PATH</code> gymnastics</td>
+</tr>
+<tr>
+<td>📁 <b>Project mode</b><br>Download + transcribe video URLs into organized project folders</td>
+<td>🔁 <b>Resume-safe batches</b><br>Skip completed transcripts; re-run the same command safely</td>
+</tr>
+<tr>
+<td>🔧 <b>Layered config</b><br>CLI flags > env vars > TOML file > built-in defaults</td>
+<td>📝 <b>TXT and SRT output</b><br>Plain transcript or subtitle-ready SRT, your choice</td>
+</tr>
+</table>
+
+---
+
+## Contents
+
+- [Install](#install)
+- [Configuration](#configuration)
+- [Usage](#usage)
+  - [Project mode — download and transcribe URLs](#project-mode--download-and-transcribe-urls)
+  - [Batch transcribe local files](#batch-transcribe-local-files)
+  - [Common examples](#common-examples)
+- [Models](#models)
+- [Troubleshooting](#troubleshooting)
+- [Development](#development)
+
+---
 
 ## Install
 
@@ -17,8 +57,7 @@ cd ~/code/transcribe
 uv tool install .
 ```
 
-This puts a `transcribe` command on your PATH. For development use an editable install
-instead:
+This puts a `transcribe` command on your PATH. For development use an editable install instead:
 
 ```bash
 uv venv --python 3.11
@@ -30,16 +69,30 @@ GPU is auto-detected: when CUDA is present, `transcribe` locates `libcublas` and
 inside the installed `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` wheels and loads them in-process.
 No `LD_LIBRARY_PATH` setup needed.
 
+---
+
 ## Configuration
+
+<details>
+<summary>Config file, env vars, and precedence</summary>
 
 A TOML config is auto-created on first run at `$XDG_CONFIG_HOME/transcribe/config.toml`
 (typically `~/.config/transcribe/config.toml`). All keys are commented out — uncomment any
 line to override the built-in default for that key.
 
-Precedence (lowest to highest): builtin default → config file → `TRANSCRIBE_*` env var → CLI flag.
+**Precedence** (lowest → highest): builtin default → config file → `TRANSCRIBE_*` env var → CLI flag.
 
-Environment overrides use the prefix `TRANSCRIBE_` and match the config keys, e.g.
-`TRANSCRIBE_MODEL=small`, `TRANSCRIBE_DEVICE=cpu`, `TRANSCRIBE_PROJECT_ROOT=/data/transcripts`.
+Environment overrides use the prefix `TRANSCRIBE_` and match the config keys:
+
+```bash
+TRANSCRIBE_MODEL=small
+TRANSCRIBE_DEVICE=cpu
+TRANSCRIBE_PROJECT_ROOT=/data/transcripts
+```
+
+</details>
+
+---
 
 ## Usage
 
@@ -101,58 +154,45 @@ Use `--output-dir` to redirect all output to a single folder:
 transcribe clip1.wav clip2.m4a --output-dir ./transcripts
 ```
 
-## Common examples
-
-Different model:
+### Common examples
 
 ```bash
+# Different model
 transcribe --model large-v3
-```
 
-Write both `.txt` and `.srt`:
-
-```bash
+# Write both .txt and .srt
 transcribe --srt
-```
 
-Force GPU / CPU:
-
-```bash
+# Force GPU / CPU
 transcribe --device cuda
 transcribe --device cpu
-```
 
-Use GPU 1 only:
-
-```bash
+# Use GPU 1 only
 CUDA_VISIBLE_DEVICES=1 transcribe
-```
 
-Delete audio files after transcription:
-
-```bash
+# Delete audio files after transcription
 transcribe --cleanup
-```
 
-Custom output directory:
-
-```bash
+# Custom output directory
 transcribe ~/Downloads/example.m4a --output-dir ~/Downloads/transcripts
-```
 
-Verbose / quiet logging:
-
-```bash
+# Verbose / quiet logging
 transcribe -v clip.wav   # DEBUG: timestamped, module-named log lines
 transcribe -q clip.wav   # WARNING+ only; suppresses the progress line
 ```
 
-## Model suggestions
+---
 
-- `turbo` — best general speed/quality tradeoff
-- `small` — lighter and faster, lower accuracy
-- `medium` — middle ground
-- `large-v3` — best accuracy, slower and heavier
+## Models
+
+| Model | Speed | Accuracy | Notes |
+|-------|-------|----------|-------|
+| `turbo` | ⚡⚡⚡ | ★★★★ | Best general speed/quality tradeoff |
+| `small` | ⚡⚡⚡⚡ | ★★★ | Lighter and faster, lower accuracy |
+| `medium` | ⚡⚡ | ★★★★ | Middle ground |
+| `large-v3` | ⚡ | ★★★★★ | Best accuracy, slower and heavier |
+
+---
 
 ## Troubleshooting
 
@@ -181,6 +221,8 @@ print("GPU available:", cuda_available())
 PY
 ```
 
+---
+
 ## Development
 
 ```bash
@@ -191,3 +233,11 @@ pytest
 ruff check src/ tests/
 ruff format src/ tests/
 ```
+
+---
+
+<div align="center">
+
+Built on [faster-whisper](https://github.com/SYSTRAN/faster-whisper) · [yt-dlp](https://github.com/yt-dlp/yt-dlp) · [uv](https://docs.astral.sh/uv/) &nbsp;|&nbsp; MIT License
+
+</div>
