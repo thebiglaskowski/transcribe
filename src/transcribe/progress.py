@@ -49,7 +49,10 @@ def draw_two_bars(pct: float, eta_str: str, file_index: int, file_total: int) ->
         return
     line1 = f"{'Transcribing':<{_LABEL_WIDTH}} {_render_bar(pct)} {pct:3.0f}%  {eta_str}"
     fp = file_index / file_total * 100
-    line2 = f"{'Files':<{_LABEL_WIDTH}} {_render_bar(fp)} {file_index:>2}/{file_total}  file {file_index} of {file_total}"
+    line2 = (
+        f"{'Files':<{_LABEL_WIDTH}} {_render_bar(fp)}"
+        f" {file_index:>2}/{file_total}  file {file_index} of {file_total}"
+    )
     if _two_bar_initialized:
         print(f"\033[2A\r{line1}\n\r{line2}", end="", flush=True)
     else:

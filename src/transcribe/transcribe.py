@@ -7,14 +7,19 @@ from faster_whisper import WhisperModel
 
 from .downloader import download_audio
 from .output import write_srt, write_txt
+from .progress import (
+    draw_bar,
+    draw_two_bars,
+    finish_bar,
+    fmt_eta,
+    reset_two_bars,
+    spinner_start,
+    spinner_stop,
+)
 from .prompts import prompt_for_audio_file, prompt_project_name
 from .utils import SUPPORTED_EXTENSIONS, default_compute_type, default_device
 
 logger = logging.getLogger(__name__)
-
-
-def _progress_enabled() -> bool:
-    return logger.isEnabledFor(logging.INFO)
 
 
 def transcribe_file(
@@ -24,6 +29,7 @@ def transcribe_file(
     model: WhisperModel,
     args: argparse.Namespace,
     info_prefix: str = "",
+    file_progress: tuple[int, int] | None = None,
 ) -> bool:
     """Transcribe a single audio file. Returns True on success."""
     logger.info("\n%sInput:  %s", info_prefix, audio_path)
@@ -42,20 +48,25 @@ def transcribe_file(
     )
 
     segments: list = []
-    show_progress = _progress_enabled()
-    if show_progress:
-        print("Transcribing ", end="", flush=True)
     for segment in segments_iter:
         segments.append(segment)
-        if not show_progress:
-            continue
         if info.duration:
-            pct = min(100, int(segment.end / info.duration * 100))
-            print(f"\rTranscribing {pct:3d}%", end="", flush=True)
+            pct = min(100.0, segment.end / info.duration * 100)
+            elapsed = time.time() - start_time
+            remaining = elapsed / max(pct / 100, 0.001) - elapsed
+            eta = fmt_eta(remaining)
         else:
-            print(".", end="", flush=True)
-    if show_progress:
-        print()
+            pct = 0.0
+            eta = ""
+        if file_progress is not None:
+            draw_two_bars(pct, eta, *file_progress)
+        else:
+            draw_bar("Transcribing", pct, eta)
+
+    if file_progress is not None:
+        reset_two_bars()
+    else:
+        finish_bar()
 
     if not segments:
         logger.warning("No transcript text was produced.")
@@ -77,12 +88,13 @@ def run_project_workflow(urls: list[str], args: argparse.Namespace, project_root
     device = default_device() if args.device == "auto" else args.device
     compute_type = args.compute_type or default_compute_type(device)
 
-    logger.info("\nLoading model: %s", args.model)
-    logger.info("Device: %s | Compute type: %s", device, compute_type)
-    logger.info("Project folder: %s", project_dir)
+    logger.info("\nProject folder: %s", project_dir)
     logger.info("Videos to process: %d", len(urls))
 
+    _spinner = spinner_start(f"Loading model {args.model}…")
     model = WhisperModel(args.model, device=device, compute_type=compute_type)
+    spinner_stop(_spinner)
+    logger.info("Device: %s | Compute type: %s", device, compute_type)
 
     successes = 0
     failures = 0
@@ -110,7 +122,10 @@ def run_project_workflow(urls: list[str], args: argparse.Namespace, project_root
             continue
 
         try:
-            ok = transcribe_file(audio_path, txt_path, srt_path, model, args, info_prefix="  ")
+            ok = transcribe_file(
+                audio_path, txt_path, srt_path, model, args,
+                info_prefix="  ", file_progress=(i, len(urls)),
+            )
             if ok:
                 successes += 1
                 if args.cleanup:
@@ -147,11 +162,12 @@ def run_multi_file_workflow(raw_paths: list[str], args: argparse.Namespace) -> i
     device = default_device() if args.device == "auto" else args.device
     compute_type = args.compute_type or default_compute_type(device)
 
-    logger.info("\nLoading model: %s", args.model)
-    logger.info("Device: %s | Compute type: %s", device, compute_type)
-    logger.info("Files to process: %d", len(paths))
+    logger.info("\nFiles to process: %d", len(paths))
 
+    _spinner = spinner_start(f"Loading model {args.model}…")
     model = WhisperModel(args.model, device=device, compute_type=compute_type)
+    spinner_stop(_spinner)
+    logger.info("Device: %s | Compute type: %s", device, compute_type)
 
     output_dir_override = Path(args.output_dir).expanduser() if args.output_dir else None
     if output_dir_override:
@@ -175,7 +191,10 @@ def run_multi_file_workflow(raw_paths: list[str], args: argparse.Namespace) -> i
             continue
 
         try:
-            ok = transcribe_file(audio_path, txt_path, srt_path, model, args, info_prefix="  ")
+            ok = transcribe_file(
+                audio_path, txt_path, srt_path, model, args,
+                info_prefix="  ", file_progress=(i, len(paths)),
+            )
             if ok:
                 successes += 1
                 if args.cleanup:
@@ -218,10 +237,10 @@ def run_single_file_workflow(raw_path: str | None, args: argparse.Namespace) -> 
     srt_path = (output_dir / f"{audio_path.stem}.srt") if args.srt else None
 
     logger.info("")
-    logger.info("Loading model: %s", args.model)
-    logger.info("Device: %s | Compute type: %s", device, compute_type)
-
+    _spinner = spinner_start(f"Loading model {args.model}…")
     model = WhisperModel(args.model, device=device, compute_type=compute_type)
+    spinner_stop(_spinner)
+    logger.info("Device: %s | Compute type: %s", device, compute_type)
 
     try:
         ok = transcribe_file(audio_path, txt_path, srt_path, model, args)
