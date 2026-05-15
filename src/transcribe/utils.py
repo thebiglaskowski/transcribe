@@ -57,8 +57,11 @@ def resolve_cuda_libs() -> None:
     except ImportError:
         return
 
-    cublas_dir = Path(cublas_mod.__file__).parent
-    cudnn_dir = Path(cudnn_mod.__file__).parent
+    # nvidia.cublas.lib and nvidia.cudnn.lib are namespace packages (no __init__.py),
+    # so __file__ is None. __path__ is present on every package and points at the
+    # directory holding the .so files.
+    cublas_dir = Path(cublas_mod.__path__[0])
+    cudnn_dir = Path(cudnn_mod.__path__[0])
 
     current = os.environ.get("LD_LIBRARY_PATH", "")
     parts = [str(cublas_dir), str(cudnn_dir)]
