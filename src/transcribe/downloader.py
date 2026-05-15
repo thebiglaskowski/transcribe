@@ -47,8 +47,11 @@ def download_audio(url: str, project_dir: Path, stem: str) -> Path:
     }
 
     logger.info("\nDownloading: %s", url)
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+    finally:
+        finish_bar()
 
     audio_path = project_dir / f"{stem}.wav"
     if not audio_path.exists():

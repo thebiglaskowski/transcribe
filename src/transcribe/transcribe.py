@@ -48,25 +48,26 @@ def transcribe_file(
     )
 
     segments: list = []
-    for segment in segments_iter:
-        segments.append(segment)
-        if info.duration:
-            pct = min(100.0, segment.end / info.duration * 100)
-            elapsed = time.time() - start_time
-            remaining = elapsed / max(pct / 100, 0.001) - elapsed
-            eta = fmt_eta(remaining)
-        else:
-            pct = 0.0
-            eta = ""
+    try:
+        for segment in segments_iter:
+            segments.append(segment)
+            if info.duration:
+                pct = min(100.0, segment.end / info.duration * 100)
+                elapsed = time.time() - start_time
+                remaining = elapsed / max(pct / 100, 0.001) - elapsed
+                eta = fmt_eta(remaining)
+            else:
+                pct = 0.0
+                eta = ""
+            if file_progress is not None:
+                draw_two_bars(pct, eta, *file_progress)
+            else:
+                draw_bar("Transcribing", pct, eta)
+    finally:
         if file_progress is not None:
-            draw_two_bars(pct, eta, *file_progress)
+            reset_two_bars()
         else:
-            draw_bar("Transcribing", pct, eta)
-
-    if file_progress is not None:
-        reset_two_bars()
-    else:
-        finish_bar()
+            finish_bar()
 
     if not segments:
         logger.warning("No transcript text was produced.")
@@ -92,8 +93,10 @@ def run_project_workflow(urls: list[str], args: argparse.Namespace, project_root
     logger.info("Videos to process: %d", len(urls))
 
     _spinner = spinner_start(f"Loading model {args.model}…")
-    model = WhisperModel(args.model, device=device, compute_type=compute_type)
-    spinner_stop(_spinner)
+    try:
+        model = WhisperModel(args.model, device=device, compute_type=compute_type)
+    finally:
+        spinner_stop(_spinner)
     logger.info("Device: %s | Compute type: %s", device, compute_type)
 
     successes = 0
@@ -123,8 +126,13 @@ def run_project_workflow(urls: list[str], args: argparse.Namespace, project_root
 
         try:
             ok = transcribe_file(
-                audio_path, txt_path, srt_path, model, args,
-                info_prefix="  ", file_progress=(i, len(urls)),
+                audio_path,
+                txt_path,
+                srt_path,
+                model,
+                args,
+                info_prefix="  ",
+                file_progress=(i, len(urls)),
             )
             if ok:
                 successes += 1
@@ -165,8 +173,10 @@ def run_multi_file_workflow(raw_paths: list[str], args: argparse.Namespace) -> i
     logger.info("\nFiles to process: %d", len(paths))
 
     _spinner = spinner_start(f"Loading model {args.model}…")
-    model = WhisperModel(args.model, device=device, compute_type=compute_type)
-    spinner_stop(_spinner)
+    try:
+        model = WhisperModel(args.model, device=device, compute_type=compute_type)
+    finally:
+        spinner_stop(_spinner)
     logger.info("Device: %s | Compute type: %s", device, compute_type)
 
     output_dir_override = Path(args.output_dir).expanduser() if args.output_dir else None
@@ -192,8 +202,13 @@ def run_multi_file_workflow(raw_paths: list[str], args: argparse.Namespace) -> i
 
         try:
             ok = transcribe_file(
-                audio_path, txt_path, srt_path, model, args,
-                info_prefix="  ", file_progress=(i, len(paths)),
+                audio_path,
+                txt_path,
+                srt_path,
+                model,
+                args,
+                info_prefix="  ",
+                file_progress=(i, len(paths)),
             )
             if ok:
                 successes += 1
@@ -238,8 +253,10 @@ def run_single_file_workflow(raw_path: str | None, args: argparse.Namespace) -> 
 
     logger.info("")
     _spinner = spinner_start(f"Loading model {args.model}…")
-    model = WhisperModel(args.model, device=device, compute_type=compute_type)
-    spinner_stop(_spinner)
+    try:
+        model = WhisperModel(args.model, device=device, compute_type=compute_type)
+    finally:
+        spinner_stop(_spinner)
     logger.info("Device: %s | Compute type: %s", device, compute_type)
 
     try:
