@@ -6,6 +6,7 @@ import pytest
 from transcribe import config as cfg
 from transcribe.cli import _classify_inputs
 from transcribe.output import write_srt, write_txt
+from transcribe.progress import _fmt_eta, _render_bar
 from transcribe.utils import is_url, sanitize_project_name, srt_timestamp
 
 
@@ -194,3 +195,43 @@ def test_load_file_expands_project_root_path(tmp_path: Path):
     p.write_text('project_root = "~/custom-root"\n', encoding="utf-8")
     result = cfg.load_file(p)
     assert result["project_root"] == Path("~/custom-root").expanduser()
+
+
+# ---------- progress helpers ----------
+
+
+def test_fmt_eta_seconds():
+    assert _fmt_eta(30) == "0:30 remaining"
+
+
+def test_fmt_eta_over_minute():
+    assert _fmt_eta(90) == "1:30 remaining"
+
+
+def test_fmt_eta_zero_returns_empty():
+    assert _fmt_eta(0) == ""
+
+
+def test_fmt_eta_negative_returns_empty():
+    assert _fmt_eta(-5) == ""
+
+
+def test_fmt_eta_over_hour_returns_empty():
+    assert _fmt_eta(3700) == ""
+
+
+def test_render_bar_zero_percent():
+    assert _render_bar(0) == "[" + "░" * 20 + "]"
+
+
+def test_render_bar_full():
+    assert _render_bar(100) == "[" + "█" * 20 + "]"
+
+
+def test_render_bar_half():
+    bar = _render_bar(50)
+    assert bar == "[" + "█" * 10 + "░" * 10 + "]"
+
+
+def test_render_bar_clamps_over_100():
+    assert _render_bar(150) == "[" + "█" * 20 + "]"
