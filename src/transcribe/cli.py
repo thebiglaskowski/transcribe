@@ -1,4 +1,5 @@
 import argparse
+import logging
 from pathlib import Path
 
 from . import config as cfg
@@ -14,6 +15,8 @@ from .transcribe import (
     run_single_file_workflow,
 )
 from .utils import is_url, resolve_cuda_libs
+
+logger = logging.getLogger(__name__)
 
 
 def build_parser(defaults: dict) -> argparse.ArgumentParser:
@@ -88,7 +91,33 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         default=str(defaults["project_root"]),
         help=f"Root folder for URL-project subfolders. Default: {defaults['project_root']}",
     )
+    verbosity = parser.add_mutually_exclusive_group()
+    verbosity.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Verbose output (DEBUG-level logging).",
+    )
+    verbosity.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="Quiet output (WARNING and above only; suppresses the progress line).",
+    )
     return parser
+
+
+def _configure_logging(verbose: bool, quiet: bool) -> None:
+    if verbose:
+        level = logging.DEBUG
+        fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    elif quiet:
+        level = logging.WARNING
+        fmt = "%(message)s"
+    else:
+        level = logging.INFO
+        fmt = "%(message)s"
+    logging.basicConfig(level=level, format=fmt, force=True)
 
 
 def _classify_inputs(inputs: list[str]) -> tuple[list[str], list[str], bool]:
@@ -99,14 +128,14 @@ def _classify_inputs(inputs: list[str]) -> tuple[list[str], list[str], bool]:
 
 
 def main() -> int:
-    resolve_cuda_libs()
-
     file_cfg = cfg.load_file(cfg.default_config_path())
     env_cfg = cfg.load_env()
     merged = cfg.merge(file_cfg, env_cfg)
 
     parser = build_parser(merged)
     args = parser.parse_args()
+    _configure_logging(args.verbose, args.quiet)
+    resolve_cuda_libs()
     project_root = Path(args.project_root).expanduser()
 
     # Resolve --model sentinel: CLI > env > config > interactive menu (only when no inputs) > builtin.
@@ -137,7 +166,9 @@ def main() -> int:
 
         urls, paths, mixed = _classify_inputs(args.inputs)
         if mixed:
-            print("Error: mix of URLs and file paths is not supported. Pass only URLs or only file paths.")
+            logger.error(
+                "Mix of URLs and file paths is not supported. Pass only URLs or only file paths."
+            )
             return 1
 
         if urls:

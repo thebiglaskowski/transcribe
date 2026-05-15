@@ -1,6 +1,9 @@
+import logging
 from pathlib import Path
 
 from .utils import SUPPORTED_EXTENSIONS
+
+logger = logging.getLogger(__name__)
 
 
 def download_audio(url: str, project_dir: Path, stem: str) -> Path:
@@ -22,7 +25,7 @@ def download_audio(url: str, project_dir: Path, stem: str) -> Path:
         "no_warnings": False,
     }
 
-    print(f"\nDownloading: {url}")
+    logger.info("\nDownloading: %s", url)
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
 

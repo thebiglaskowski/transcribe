@@ -1,4 +1,5 @@
 import argparse
+import logging
 import time
 from pathlib import Path
 
@@ -8,6 +9,12 @@ from .downloader import download_audio
 from .output import write_srt, write_txt
 from .prompts import prompt_for_audio_file, prompt_project_name
 from .utils import SUPPORTED_EXTENSIONS, default_compute_type, default_device
+
+logger = logging.getLogger(__name__)
+
+
+def _progress_enabled() -> bool:
+    return logger.isEnabledFor(logging.INFO)
 
 
 def transcribe_file(
@@ -19,10 +26,10 @@ def transcribe_file(
     info_prefix: str = "",
 ) -> bool:
     """Transcribe a single audio file. Returns True on success."""
-    print(f"\n{info_prefix}Input:  {audio_path}")
-    print(f"{info_prefix}Output: {txt_path}")
+    logger.info("\n%sInput:  %s", info_prefix, audio_path)
+    logger.info("%sOutput: %s", info_prefix, txt_path)
     if srt_path:
-        print(f"{info_prefix}SRT:    {srt_path}")
+        logger.info("%sSRT:    %s", info_prefix, srt_path)
 
     start_time = time.time()
     use_vad = not args.no_vad
@@ -35,18 +42,23 @@ def transcribe_file(
     )
 
     segments: list = []
-    print("Transcribing ", end="", flush=True)
+    show_progress = _progress_enabled()
+    if show_progress:
+        print("Transcribing ", end="", flush=True)
     for segment in segments_iter:
         segments.append(segment)
+        if not show_progress:
+            continue
         if info.duration:
             pct = min(100, int(segment.end / info.duration * 100))
             print(f"\rTranscribing {pct:3d}%", end="", flush=True)
         else:
             print(".", end="", flush=True)
-    print()
+    if show_progress:
+        print()
 
     if not segments:
-        print("No transcript text was produced.")
+        logger.warning("No transcript text was produced.")
         return False
 
     write_txt(segments, txt_path)
@@ -54,8 +66,10 @@ def transcribe_file(
         write_srt(segments, srt_path)
 
     elapsed = time.time() - start_time
-    print(f"Language: {info.language} ({info.language_probability:.2f}) | {elapsed:.1f}s")
-    print(f"Saved: {txt_path}")
+    logger.info(
+        "Language: %s (%.2f) | %.1fs", info.language, info.language_probability, elapsed
+    )
+    logger.info("Saved: %s", txt_path)
     return True
 
 
@@ -67,34 +81,35 @@ def run_project_workflow(
     device = default_device() if args.device == "auto" else args.device
     compute_type = args.compute_type or default_compute_type(device)
 
-    print(f"\nLoading model: {args.model}")
-    print(f"Device: {device} | Compute type: {compute_type}")
-    print(f"Project folder: {project_dir}")
-    print(f"Videos to process: {len(urls)}")
+    logger.info("\nLoading model: %s", args.model)
+    logger.info("Device: %s | Compute type: %s", device, compute_type)
+    logger.info("Project folder: %s", project_dir)
+    logger.info("Videos to process: %d", len(urls))
 
     model = WhisperModel(args.model, device=device, compute_type=compute_type)
 
     successes = 0
     failures = 0
+    bar = "=" * 60
 
     for i, url in enumerate(urls, start=1):
         stem = f"{project_name}{i}"
-        print(f"\n{'=' * 60}")
-        print(f"[{i}/{len(urls)}] {url}")
-        print(f"{'=' * 60}")
+        logger.info("\n%s", bar)
+        logger.info("[%d/%d] %s", i, len(urls), url)
+        logger.info("%s", bar)
 
         txt_path = project_dir / f"{stem}.txt"
         srt_path = (project_dir / f"{stem}.srt") if args.srt else None
 
         if txt_path.exists() and txt_path.stat().st_size > 0:
-            print(f"  Skipping — transcript already exists: {txt_path.name}")
+            logger.info("  Skipping — transcript already exists: %s", txt_path.name)
             successes += 1
             continue
 
         try:
             audio_path = download_audio(url, project_dir, stem)
         except Exception as exc:
-            print(f"Download failed: {exc}")
+            logger.error("Download failed: %s", exc)
             failures += 1
             continue
 
@@ -104,16 +119,16 @@ def run_project_workflow(
                 successes += 1
                 if args.cleanup:
                     audio_path.unlink()
-                    print(f"Deleted: {audio_path}")
+                    logger.info("Deleted: %s", audio_path)
             else:
                 failures += 1
         except Exception as exc:
-            print(f"Transcription failed: {exc}")
+            logger.error("Transcription failed: %s", exc)
             failures += 1
 
-    print(f"\n{'=' * 60}")
-    print(f"Done. {successes} succeeded, {failures} failed.")
-    print(f"Transcripts saved in: {project_dir}")
+    logger.info("\n%s", bar)
+    logger.info("Done. %d succeeded, %d failed.", successes, failures)
+    logger.info("Transcripts saved in: %s", project_dir)
     return 0 if failures == 0 else 1
 
 
@@ -122,23 +137,23 @@ def run_multi_file_workflow(raw_paths: list[str], args: argparse.Namespace) -> i
     for raw in raw_paths:
         p = Path(raw.strip().strip('"').strip("'")).expanduser()
         if not p.exists():
-            print(f"File not found: {p}")
+            logger.error("File not found: %s", p)
             return 1
         if not p.is_file():
-            print(f"Not a file: {p}")
+            logger.error("Not a file: %s", p)
             return 1
         if p.suffix.lower() not in SUPPORTED_EXTENSIONS:
             allowed = ", ".join(sorted(SUPPORTED_EXTENSIONS))
-            print(f"Unsupported extension: {p.suffix}. Allowed: {allowed}")
+            logger.error("Unsupported extension: %s. Allowed: %s", p.suffix, allowed)
             return 1
         paths.append(p)
 
     device = default_device() if args.device == "auto" else args.device
     compute_type = args.compute_type or default_compute_type(device)
 
-    print(f"\nLoading model: {args.model}")
-    print(f"Device: {device} | Compute type: {compute_type}")
-    print(f"Files to process: {len(paths)}")
+    logger.info("\nLoading model: %s", args.model)
+    logger.info("Device: %s | Compute type: %s", device, compute_type)
+    logger.info("Files to process: %d", len(paths))
 
     model = WhisperModel(args.model, device=device, compute_type=compute_type)
 
@@ -148,17 +163,18 @@ def run_multi_file_workflow(raw_paths: list[str], args: argparse.Namespace) -> i
 
     successes = 0
     failures = 0
+    bar = "=" * 60
 
     for i, audio_path in enumerate(paths, start=1):
-        print(f"\n{'=' * 60}")
-        print(f"[{i}/{len(paths)}] {audio_path.name}")
-        print(f"{'=' * 60}")
+        logger.info("\n%s", bar)
+        logger.info("[%d/%d] %s", i, len(paths), audio_path.name)
+        logger.info("%s", bar)
         output_dir = output_dir_override or audio_path.parent
         txt_path = output_dir / f"{audio_path.stem}.txt"
         srt_path = (output_dir / f"{audio_path.stem}.srt") if args.srt else None
 
         if txt_path.exists() and txt_path.stat().st_size > 0:
-            print(f"  Skipping — transcript already exists: {txt_path.name}")
+            logger.info("  Skipping — transcript already exists: %s", txt_path.name)
             successes += 1
             continue
 
@@ -168,15 +184,15 @@ def run_multi_file_workflow(raw_paths: list[str], args: argparse.Namespace) -> i
                 successes += 1
                 if args.cleanup:
                     audio_path.unlink()
-                    print(f"Deleted: {audio_path}")
+                    logger.info("Deleted: %s", audio_path)
             else:
                 failures += 1
         except Exception as exc:
-            print(f"Transcription failed: {exc}")
+            logger.error("Transcription failed: %s", exc)
             failures += 1
 
-    print(f"\n{'=' * 60}")
-    print(f"Done. {successes} succeeded, {failures} failed.")
+    logger.info("\n%s", bar)
+    logger.info("Done. %d succeeded, %d failed.", successes, failures)
     return 0 if failures == 0 else 1
 
 
@@ -184,14 +200,14 @@ def run_single_file_workflow(raw_path: str | None, args: argparse.Namespace) -> 
     if raw_path:
         path = Path(raw_path.strip().strip('"').strip("'")).expanduser()
         if not path.exists():
-            print(f"File not found: {path}")
+            logger.error("File not found: %s", path)
             return 1
         if not path.is_file():
-            print(f"Not a file: {path}")
+            logger.error("Not a file: %s", path)
             return 1
         if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
             allowed = ", ".join(sorted(SUPPORTED_EXTENSIONS))
-            print(f"Unsupported extension: {path.suffix}. Allowed: {allowed}")
+            logger.error("Unsupported extension: %s. Allowed: %s", path.suffix, allowed)
             return 1
         audio_path = path
     else:
@@ -205,9 +221,9 @@ def run_single_file_workflow(raw_path: str | None, args: argparse.Namespace) -> 
     txt_path = output_dir / f"{audio_path.stem}.txt"
     srt_path = (output_dir / f"{audio_path.stem}.srt") if args.srt else None
 
-    print()
-    print(f"Loading model: {args.model}")
-    print(f"Device: {device} | Compute type: {compute_type}")
+    logger.info("")
+    logger.info("Loading model: %s", args.model)
+    logger.info("Device: %s | Compute type: %s", device, compute_type)
 
     model = WhisperModel(args.model, device=device, compute_type=compute_type)
 
@@ -215,8 +231,8 @@ def run_single_file_workflow(raw_path: str | None, args: argparse.Namespace) -> 
         ok = transcribe_file(audio_path, txt_path, srt_path, model, args)
         if ok and args.cleanup:
             audio_path.unlink()
-            print(f"Deleted: {audio_path}")
+            logger.info("Deleted: %s", audio_path)
         return 0 if ok else 1
     except Exception as exc:
-        print(f"\nTranscription failed: {exc}")
+        logger.error("\nTranscription failed: %s", exc)
         return 1
