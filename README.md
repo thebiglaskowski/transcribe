@@ -69,13 +69,15 @@ You will be prompted:
 Project name (a folder will be created): my-research
 ```
 
-This creates a `my-research/` folder and produces:
+Project folders are created under `~/.transcribe/projects/` by default. Override with
+`--project-root /some/path`, the `TRANSCRIBE_PROJECT_ROOT` env var, or `project_root` in
+the config file. The example above produces:
 
 ```
-my-research/my-research1.wav   ← extracted audio
-my-research/my-research1.txt   ← transcript
-my-research/my-research2.wav
-my-research/my-research2.txt
+~/.transcribe/projects/my-research/my-research1.wav   ← extracted audio
+~/.transcribe/projects/my-research/my-research1.txt   ← transcript
+~/.transcribe/projects/my-research/my-research2.wav
+~/.transcribe/projects/my-research/my-research2.txt
 ...
 ```
 
@@ -136,6 +138,13 @@ Custom output directory:
 transcribe ~/Downloads/example.m4a --output-dir ~/Downloads/transcripts
 ```
 
+Verbose / quiet logging:
+
+```bash
+transcribe -v clip.wav   # DEBUG: timestamped, module-named log lines
+transcribe -q clip.wav   # WARNING+ only; suppresses the progress line
+```
+
 ## Model suggestions
 
 - `turbo` — best general speed/quality tradeoff
@@ -159,12 +168,14 @@ nvidia-smi
 
 ### Confirm the CUDA libraries are loadable
 
+This runs the same auto-resolution `transcribe` does on startup and prints whether GPU is
+available:
+
 ```bash
 python - <<'PY'
-import ctypes
-ctypes.CDLL("libcublas.so.12")
-ctypes.CDLL("libcudnn.so.9")
-print("CUDA libraries loaded OK")
+from transcribe.utils import cuda_available, resolve_cuda_libs
+resolve_cuda_libs()
+print("GPU available:", cuda_available())
 PY
 ```
 
