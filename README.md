@@ -24,18 +24,20 @@ source .venv/bin/activate
 uv pip install -e ".[dev]"
 ```
 
-### GPU library path (temporary)
+GPU is auto-detected: when CUDA is present, `transcribe` locates `libcublas` and `libcudnn`
+inside the installed `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` wheels and loads them in-process.
+No `LD_LIBRARY_PATH` setup needed.
 
-Until the next release auto-resolves it, GPU users must still export the CUDA library
-path to the venv where `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` were installed. With
-`uv tool install`, that location is under `~/.local/share/uv/tools/transcribe/`:
+## Configuration
 
-```bash
-export TRANSCRIBE_SITEPKG="$(uv tool dir)/transcribe/lib/python3.11/site-packages"
-export LD_LIBRARY_PATH="$TRANSCRIBE_SITEPKG/nvidia/cublas/lib:$TRANSCRIBE_SITEPKG/nvidia/cudnn/lib:$LD_LIBRARY_PATH"
-```
+A TOML config is auto-created on first run at `$XDG_CONFIG_HOME/transcribe/config.toml`
+(typically `~/.config/transcribe/config.toml`). All keys are commented out — uncomment any
+line to override the built-in default for that key.
 
-Add to `~/.bashrc` to make permanent.
+Precedence (lowest to highest): builtin default → config file → `TRANSCRIBE_*` env var → CLI flag.
+
+Environment overrides use the prefix `TRANSCRIBE_` and match the config keys, e.g.
+`TRANSCRIBE_MODEL=small`, `TRANSCRIBE_DEVICE=cpu`, `TRANSCRIBE_PROJECT_ROOT=/data/transcripts`.
 
 ## Usage
 
@@ -145,7 +147,9 @@ transcribe ~/Downloads/example.m4a --output-dir ~/Downloads/transcripts
 
 ### `libcublas.so.12 is not found`
 
-Your CUDA library path is not set. See the "GPU library path" section above.
+The `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` wheels are missing from your install. Reinstall
+with `uv tool install --reinstall .`. If you intend to run on CPU only, pass `--device cpu` or
+set `device = "cpu"` in `~/.config/transcribe/config.toml`.
 
 ### Check that WSL sees your GPU
 
