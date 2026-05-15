@@ -254,11 +254,13 @@ def _tty_buf(monkeypatch) -> StringIO:
 
 def test_fmt_eta_public_alias():
     from transcribe.progress import fmt_eta
+
     assert fmt_eta(30) == "0:30 remaining"
 
 
 def test_draw_bar_no_output_when_not_tty(monkeypatch, capsys):
     from transcribe.progress import draw_bar
+
     monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
     draw_bar("Test", 50.0, "0:10 remaining")
     assert capsys.readouterr().out == ""
@@ -266,6 +268,7 @@ def test_draw_bar_no_output_when_not_tty(monkeypatch, capsys):
 
 def test_draw_bar_contains_label_pct_eta(monkeypatch):
     from transcribe.progress import draw_bar
+
     buf = _tty_buf(monkeypatch)
     draw_bar("Transcribing", 73.0, "0:12 remaining")
     out = buf.getvalue()
@@ -277,6 +280,7 @@ def test_draw_bar_contains_label_pct_eta(monkeypatch):
 
 def test_draw_bar_no_eta_when_empty(monkeypatch):
     from transcribe.progress import draw_bar
+
     buf = _tty_buf(monkeypatch)
     draw_bar("Transcribing", 50.0)
     out = buf.getvalue()
@@ -285,6 +289,7 @@ def test_draw_bar_no_eta_when_empty(monkeypatch):
 
 def test_finish_bar_emits_newline(monkeypatch):
     from transcribe.progress import finish_bar
+
     buf = _tty_buf(monkeypatch)
     finish_bar()
     assert buf.getvalue() == "\n"
@@ -292,6 +297,7 @@ def test_finish_bar_emits_newline(monkeypatch):
 
 def test_finish_bar_silent_when_not_tty(monkeypatch, capsys):
     from transcribe.progress import finish_bar
+
     monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
     finish_bar()
     assert capsys.readouterr().out == ""
