@@ -1,3 +1,5 @@
+![transcribe](assets/transcribe.png)
+
 # transcribe
 
 GPU-aware audio/video transcription with `faster-whisper`. Wraps the Whisper model with a
