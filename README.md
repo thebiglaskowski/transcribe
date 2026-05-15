@@ -50,7 +50,7 @@ transcribe
 Single file:
 
 ```bash
-transcribe /mnt/c/Users/joela/Downloads/example.m4a
+transcribe ~/Downloads/example.m4a
 ```
 
 ### Project mode — download and transcribe URLs
@@ -69,15 +69,15 @@ You will be prompted:
 Project name (a folder will be created): my-research
 ```
 
-Project folders are created under `~/.transcribe/projects/` by default. Override with
-`--project-root /some/path`, the `TRANSCRIBE_PROJECT_ROOT` env var, or `project_root` in
-the config file. The example above produces:
+Project folders are created under `./projects/` (relative to your working directory) by default.
+Override with `--project-root /some/path`, the `TRANSCRIBE_PROJECT_ROOT` env var, or `project_root`
+in the config file. The example above produces:
 
 ```
-~/.transcribe/projects/my-research/my-research1.wav   ← extracted audio
-~/.transcribe/projects/my-research/my-research1.txt   ← transcript
-~/.transcribe/projects/my-research/my-research2.wav
-~/.transcribe/projects/my-research/my-research2.txt
+projects/my-research/my-research1.wav   ← extracted audio
+projects/my-research/my-research1.txt   ← transcript
+projects/my-research/my-research2.wav
+projects/my-research/my-research2.txt
 ...
 ```
 

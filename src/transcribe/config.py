@@ -17,7 +17,7 @@ class Settings:
     srt: bool = False
     language: str | None = None
     cleanup: bool = False
-    project_root: Path = field(default_factory=lambda: Path.home() / ".transcribe" / "projects")
+    project_root: Path = field(default_factory=lambda: Path("projects"))
 
 
 DEFAULT_CONFIG_TEMPLATE = """\
@@ -33,7 +33,7 @@ DEFAULT_CONFIG_TEMPLATE = """\
 # srt = false
 # language = "en"                # leave unset for auto-detect
 # cleanup = false
-# project_root = "~/.transcribe/projects"
+# project_root = "projects"           # relative to cwd; use an absolute path to fix it globally
 """
 
 

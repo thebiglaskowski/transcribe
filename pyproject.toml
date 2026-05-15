@@ -20,6 +20,7 @@ classifiers = [
 dependencies = [
     "faster-whisper>=1.0",
     "yt-dlp>=2024.1",
+    "curl_cffi>=0.7",
     "nvidia-cublas-cu12",
     "nvidia-cudnn-cu12==9.*",
 ]

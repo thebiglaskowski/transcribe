@@ -33,6 +33,7 @@ Thumbs.db
 
 # Project runtime / output (never commit transcripts or audio)
 .transcribe/
+/projects/
 *.wav
 *.mp3
 *.m4a
