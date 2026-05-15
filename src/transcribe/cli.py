@@ -117,7 +117,21 @@ def _configure_logging(verbose: bool, quiet: bool) -> None:
     else:
         level = logging.INFO
         fmt = "%(message)s"
-    logging.basicConfig(level=level, format=fmt, force=True)
+
+    # Attach a handler to the "transcribe" namespace only, not the root logger.
+    # Otherwise third-party libraries (httpx, huggingface_hub, urllib3) print at INFO too.
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(fmt))
+
+    pkg_logger = logging.getLogger("transcribe")
+    pkg_logger.handlers.clear()
+    pkg_logger.addHandler(handler)
+    pkg_logger.setLevel(level)
+    pkg_logger.propagate = False
+
+    # Keep noisy HTTP loggers at WARNING even if something else later raises root.
+    for name in ("httpx", "httpcore", "urllib3", "huggingface_hub"):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 def _classify_inputs(inputs: list[str]) -> tuple[list[str], list[str], bool]:
