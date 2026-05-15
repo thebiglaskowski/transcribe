@@ -1,7 +1,47 @@
-# Ignore everything
-*
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
 
-# Except these
-!.gitignore
-!README.md
-!transcribe_audio.py
+# Distributions / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+wheels/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Tooling caches
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+.tox/
+.coverage
+htmlcov/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project runtime / output (never commit transcripts or audio)
+.transcribe/
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.aac
+*.ogg
+*.wma
+*.mp4
+*.mkv
+*.mov
+*.webm
+*.srt

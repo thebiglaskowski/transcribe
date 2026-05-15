@@ -1,74 +1,64 @@
-# faster-whisper transcription in WSL2 with uv
+# transcribe
 
-This setup uses `faster-whisper` to transcribe an audio file and save a `.txt` transcript.
+GPU-aware audio/video transcription with `faster-whisper`. Wraps the Whisper model with a
+CLI that handles single files, batches of local files, and project folders built from
+video URLs (YouTube, TikTok, etc. via `yt-dlp`).
 
-## What this does
+## Install
 
-- prompts you for a file path if you do not pass one on the command line
-- writes a `.txt` transcript next to the source file
-- can also write an `.srt` subtitle file if you use `--srt`
-- uses GPU automatically if CUDA is available in WSL
-
-## 1) Create and activate your venv
+Requires Python 3.11+ and [`uv`](https://docs.astral.sh/uv/). For GPU mode you also need an
+NVIDIA driver and `ffmpeg` (`sudo apt install ffmpeg`).
 
 ```bash
-mkdir -p ~/.transcribe
-cd ~/.transcribe
+git clone <this-repo> ~/code/transcribe
+cd ~/code/transcribe
+uv tool install .
+```
+
+This puts a `transcribe` command on your PATH. For development use an editable install
+instead:
+
+```bash
 uv venv --python 3.11
 source .venv/bin/activate
+uv pip install -e ".[dev]"
 ```
 
-## 2) Install the packages
+### GPU library path (temporary)
+
+Until the next release auto-resolves it, GPU users must still export the CUDA library
+path to the venv where `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` were installed. With
+`uv tool install`, that location is under `~/.local/share/uv/tools/transcribe/`:
 
 ```bash
-uv pip install -U faster-whisper nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"
-```
-
-## 3) Export the CUDA library path
-
-Run this in your shell before using the script:
-
-```bash
-export TRANSCRIBE_SITEPKG="/home/joe/.transcribe/.venv/lib/python3.11/site-packages"
+export TRANSCRIBE_SITEPKG="$(uv tool dir)/transcribe/lib/python3.11/site-packages"
 export LD_LIBRARY_PATH="$TRANSCRIBE_SITEPKG/nvidia/cublas/lib:$TRANSCRIBE_SITEPKG/nvidia/cudnn/lib:$LD_LIBRARY_PATH"
 ```
 
-To make it permanent, add those two lines to `~/.bashrc`, then run:
+Add to `~/.bashrc` to make permanent.
+
+## Usage
+
+Interactive mode (prompts for mode, model, and file/URLs):
 
 ```bash
-source ~/.bashrc
+transcribe
 ```
 
-## 4) Save the script
-
-Save `transcribe_audio.py` in `~/.transcribe`.
-
-## 5) Run it
-
-Interactive mode:
+Single file:
 
 ```bash
-python transcribe_audio.py
+transcribe /mnt/c/Users/joela/Downloads/example.m4a
 ```
 
-It will prompt you for the file path, for example:
+### Project mode — download and transcribe URLs
 
-```text
-/mnt/c/Users/joela/Downloads/example.m4a
-```
-
-Direct file path mode:
+Pass one or more video URLs and the script enters project mode: it prompts you for a
+project name, creates a folder for it, downloads and extracts audio via `yt-dlp`, then
+transcribes each video in sequence.
 
 ```bash
-python transcribe_audio.py /mnt/c/Users/joela/Downloads/example.m4a
-```
-
-## Project mode — download and transcribe URLs
-
-Pass one or more video URLs and the script enters project mode: it prompts you for a project name, creates a folder for it, downloads and extracts audio via yt-dlp, then transcribes each video in sequence.
-
-```bash
-python transcribe_audio.py https://youtu.be/abc123 https://youtu.be/def456
+transcribe https://youtu.be/abc123 https://youtu.be/def456
 ```
 
 You will be prompted:
@@ -77,7 +67,7 @@ You will be prompted:
 Project name (a folder will be created): my-research
 ```
 
-This creates `~/.transcribe/my-research/` and produces:
+This creates a `my-research/` folder and produces:
 
 ```
 my-research/my-research1.wav   ← extracted audio
@@ -87,91 +77,75 @@ my-research/my-research2.txt
 ...
 ```
 
-Works with YouTube, TikTok, Instagram, and any site yt-dlp supports. Requires ffmpeg to be installed (`sudo apt install ffmpeg`).
+Works with any site `yt-dlp` supports.
 
-## Batch transcribe local files
-
-Pass multiple local file paths to transcribe them all in one run without downloading anything:
+### Batch transcribe local files
 
 ```bash
-python transcribe_audio.py clip1.wav clip2.m4a clip3.mp4
+transcribe clip1.wav clip2.m4a clip3.mp4
 ```
 
-Transcripts are saved next to each source file. If a transcript already exists for a file it will be skipped, so interrupted batch runs can be safely resumed by re-running the same command.
+Transcripts are saved next to each source file. If a transcript already exists for a
+file it will be skipped, so interrupted batch runs can be safely resumed by re-running
+the same command.
 
 Use `--output-dir` to redirect all output to a single folder:
 
 ```bash
-python transcribe_audio.py clip1.wav clip2.m4a --output-dir ./transcripts
+transcribe clip1.wav clip2.m4a --output-dir ./transcripts
 ```
 
 ## Common examples
 
-Default run:
+Different model:
 
 ```bash
-python transcribe_audio.py
-```
-
-Use a different model:
-
-```bash
-python transcribe_audio.py --model large-v3
+transcribe --model large-v3
 ```
 
 Write both `.txt` and `.srt`:
 
 ```bash
-python transcribe_audio.py --srt
+transcribe --srt
 ```
 
-Force GPU:
+Force GPU / CPU:
 
 ```bash
-python transcribe_audio.py --device cuda
-```
-
-Force CPU:
-
-```bash
-python transcribe_audio.py --device cpu
+transcribe --device cuda
+transcribe --device cpu
 ```
 
 Use GPU 1 only:
 
 ```bash
-CUDA_VISIBLE_DEVICES=1 python transcribe_audio.py
+CUDA_VISIBLE_DEVICES=1 transcribe
 ```
 
 Delete audio files after transcription:
 
 ```bash
-python transcribe_audio.py --cleanup
+transcribe --cleanup
 ```
 
-Save output somewhere else:
+Custom output directory:
 
 ```bash
-python transcribe_audio.py /mnt/c/Users/joela/Downloads/example.m4a --output-dir /mnt/c/Users/joela/Downloads/transcripts
+transcribe ~/Downloads/example.m4a --output-dir ~/Downloads/transcripts
 ```
 
 ## Model suggestions
 
-- `turbo`: best general speed/quality tradeoff
-- `small`: lighter and faster, lower accuracy
-- `medium`: middle ground
-- `large-v3`: best accuracy, slower and heavier
+- `turbo` — best general speed/quality tradeoff
+- `small` — lighter and faster, lower accuracy
+- `medium` — middle ground
+- `large-v3` — best accuracy, slower and heavier
 
 ## Troubleshooting
 
 ### `libcublas.so.12 is not found`
 
-Your CUDA library path is not set in the shell that launched Python. Re-run:
-
-```bash
-export TRANSCRIBE_SITEPKG="/home/joe/.transcribe/.venv/lib/python3.11/site-packages"
-export LD_LIBRARY_PATH="$TRANSCRIBE_SITEPKG/nvidia/cublas/lib:$TRANSCRIBE_SITEPKG/nvidia/cudnn/lib:$LD_LIBRARY_PATH"
-```
+Your CUDA library path is not set. See the "GPU library path" section above.
 
 ### Check that WSL sees your GPU
 
@@ -189,9 +163,3 @@ ctypes.CDLL("libcudnn.so.9")
 print("CUDA libraries loaded OK")
 PY
 ```
-
-## Notes
-
-- Do not use `uv run` with inline script metadata for this particular setup.
-- Run the script from your activated venv with `python transcribe_audio.py`.
-- `faster-whisper` will download the model on first use.
