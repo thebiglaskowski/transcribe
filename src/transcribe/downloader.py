@@ -1,9 +1,29 @@
 import logging
+import time
 from pathlib import Path
 
+from .progress import draw_bar, finish_bar, fmt_eta
 from .utils import SUPPORTED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
+
+
+def _make_progress_hook():
+    start = [time.time()]
+
+    def hook(d: dict) -> None:
+        if d["status"] == "downloading":
+            total = d.get("total_bytes") or d.get("total_bytes_estimate")
+            if not total:
+                return
+            pct = d["downloaded_bytes"] / total * 100
+            elapsed = time.time() - start[0]
+            remaining = elapsed / max(pct / 100, 0.001) - elapsed
+            draw_bar("Downloading", pct, fmt_eta(remaining))
+        elif d["status"] == "finished":
+            finish_bar()
+
+    return hook
 
 
 def download_audio(url: str, project_dir: Path, stem: str) -> Path:
@@ -21,8 +41,9 @@ def download_audio(url: str, project_dir: Path, stem: str) -> Path:
             }
         ],
         "keepvideo": False,
-        "quiet": False,
-        "no_warnings": False,
+        "quiet": True,
+        "no_warnings": True,
+        "progress_hooks": [_make_progress_hook()],
     }
 
     logger.info("\nDownloading: %s", url)

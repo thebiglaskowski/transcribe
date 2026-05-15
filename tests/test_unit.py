@@ -365,3 +365,46 @@ def test_reset_two_bars_clears_initialized_flag(monkeypatch):
     draw_two_bars(50.0, "0:05 remaining", 1, 3)  # should NOT have cursor-up
     assert "\033[2A" not in buf.getvalue()
     reset_two_bars()
+
+
+# ---------- download progress hook ----------
+
+
+def test_progress_hook_downloading_calls_draw_bar(monkeypatch):
+    from transcribe.downloader import _make_progress_hook
+
+    drawn = []
+    # Patch the name as imported in downloader.py, not in progress.py
+    monkeypatch.setattr("transcribe.downloader.draw_bar", lambda *a, **kw: drawn.append(a))
+    hook = _make_progress_hook()
+    hook(
+        {
+            "status": "downloading",
+            "downloaded_bytes": 50_000_000,
+            "total_bytes": 100_000_000,
+        }
+    )
+    assert len(drawn) == 1
+    label, pct = drawn[0][0], drawn[0][1]
+    assert label == "Downloading"
+    assert abs(pct - 50.0) < 0.1
+
+
+def test_progress_hook_finished_calls_finish_bar(monkeypatch):
+    from transcribe.downloader import _make_progress_hook
+
+    finished = []
+    monkeypatch.setattr("transcribe.downloader.finish_bar", lambda: finished.append(True))
+    hook = _make_progress_hook()
+    hook({"status": "finished"})
+    assert finished == [True]
+
+
+def test_progress_hook_skips_when_total_unknown(monkeypatch):
+    from transcribe.downloader import _make_progress_hook
+
+    drawn = []
+    monkeypatch.setattr("transcribe.downloader.draw_bar", lambda *a, **kw: drawn.append(a))
+    hook = _make_progress_hook()
+    hook({"status": "downloading", "downloaded_bytes": 1000})
+    assert drawn == []
