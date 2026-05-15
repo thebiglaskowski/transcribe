@@ -322,3 +322,46 @@ def test_spinner_stop_live_thread_joins_cleanly(monkeypatch):
     spinner_stop(thread)
 
     assert not thread.is_alive()
+
+
+# ---------- draw_two_bars, reset_two_bars ----------
+
+
+def test_draw_two_bars_first_render_no_cursor_up(monkeypatch):
+    from transcribe.progress import draw_two_bars, reset_two_bars
+
+    buf = _tty_buf(monkeypatch)
+    reset_two_bars()  # ensure clean state
+    draw_two_bars(50.0, "0:05 remaining", 1, 3)
+    out = buf.getvalue()
+    assert "\033[2A" not in out
+    assert "Transcribing" in out
+    assert "Files" in out
+    reset_two_bars()
+
+
+def test_draw_two_bars_second_render_has_cursor_up(monkeypatch):
+    from transcribe.progress import draw_two_bars, reset_two_bars
+
+    buf = _tty_buf(monkeypatch)
+    reset_two_bars()
+    draw_two_bars(40.0, "0:06 remaining", 1, 3)
+    buf.seek(0)
+    buf.truncate()
+    draw_two_bars(50.0, "0:05 remaining", 1, 3)
+    assert "\033[2A" in buf.getvalue()
+    reset_two_bars()
+
+
+def test_reset_two_bars_clears_initialized_flag(monkeypatch):
+    from transcribe.progress import draw_two_bars, reset_two_bars
+
+    buf = _tty_buf(monkeypatch)
+    reset_two_bars()
+    draw_two_bars(50.0, "0:05 remaining", 1, 3)  # sets initialized=True
+    reset_two_bars()
+    buf.seek(0)
+    buf.truncate()
+    draw_two_bars(50.0, "0:05 remaining", 1, 3)  # should NOT have cursor-up
+    assert "\033[2A" not in buf.getvalue()
+    reset_two_bars()
