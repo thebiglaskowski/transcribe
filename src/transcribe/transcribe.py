@@ -118,7 +118,13 @@ def run_project_workflow(urls: list[str], args: argparse.Namespace, project_root
             continue
 
         try:
-            audio_path = download_audio(url, project_dir, stem)
+            audio_path = download_audio(
+                url,
+                project_dir,
+                stem,
+                cookies_from_browser=getattr(args, "cookies_from_browser", None),
+                cookies_file=getattr(args, "cookies", None),
+            )
         except Exception as exc:
             logger.error("Download failed: %s", exc)
             failures += 1
