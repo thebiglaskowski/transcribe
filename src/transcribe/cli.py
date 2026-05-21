@@ -91,6 +91,18 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         default=str(defaults["project_root"]),
         help=f"Root folder for URL-project subfolders. Default: {defaults['project_root']}",
     )
+    parser.add_argument(
+        "--cookies-from-browser",
+        default=defaults["cookies_from_browser"],
+        metavar="BROWSER",
+        help="Pass cookies from an installed browser to bypass bot detection (e.g. chrome, firefox, edge).",
+    )
+    parser.add_argument(
+        "--cookies",
+        default=defaults["cookies_file"],
+        metavar="FILE",
+        help="Path to a Netscape-format cookies.txt file for authenticated downloads.",
+    )
     verbosity = parser.add_mutually_exclusive_group()
     verbosity.add_argument(
         "-v",

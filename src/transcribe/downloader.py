@@ -26,7 +26,13 @@ def _make_progress_hook():
     return hook
 
 
-def download_audio(url: str, project_dir: Path, stem: str) -> Path:
+def download_audio(
+    url: str,
+    project_dir: Path,
+    stem: str,
+    cookies_from_browser: str | None = None,
+    cookies_file: str | None = None,
+) -> Path:
     """Download audio from a URL using yt-dlp. Returns the path to the extracted audio file."""
     import yt_dlp
 
@@ -45,6 +51,10 @@ def download_audio(url: str, project_dir: Path, stem: str) -> Path:
         "no_warnings": True,
         "progress_hooks": [_make_progress_hook()],
     }
+    if cookies_from_browser:
+        ydl_opts["cookiesfrombrowser"] = (cookies_from_browser, None, None, None)
+    if cookies_file:
+        ydl_opts["cookiefile"] = cookies_file
 
     logger.info("\nDownloading: %s", url)
     try:

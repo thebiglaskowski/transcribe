@@ -18,6 +18,8 @@ class Settings:
     language: str | None = None
     cleanup: bool = False
     project_root: Path = field(default_factory=lambda: Path("projects"))
+    cookies_from_browser: str | None = None
+    cookies_file: str | None = None
 
 
 DEFAULT_CONFIG_TEMPLATE = """\
@@ -34,6 +36,8 @@ DEFAULT_CONFIG_TEMPLATE = """\
 # language = "en"                # leave unset for auto-detect
 # cleanup = false
 # project_root = "projects"           # relative to cwd; use an absolute path to fix it globally
+# cookies_from_browser = "chrome"     # browser to pull cookies from: chrome, firefox, chromium, edge, safari
+# cookies_file = ""                   # path to a Netscape-format cookies.txt file
 """
 
 
@@ -51,6 +55,8 @@ _ENV_MAP: dict[str, tuple[str, Callable[[str], object]]] = {
     "TRANSCRIBE_LANGUAGE": ("language", str),
     "TRANSCRIBE_CLEANUP": ("cleanup", _parse_bool),
     "TRANSCRIBE_PROJECT_ROOT": ("project_root", lambda s: Path(s).expanduser()),
+    "TRANSCRIBE_COOKIES_FROM_BROWSER": ("cookies_from_browser", str),
+    "TRANSCRIBE_COOKIES_FILE": ("cookies_file", str),
 }
 
 
