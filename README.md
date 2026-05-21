@@ -28,6 +28,10 @@
 <td>🔧 <b>Layered config</b><br>CLI flags > env vars > TOML file > built-in defaults</td>
 <td>📝 <b>TXT and SRT output</b><br>Plain transcript or subtitle-ready SRT, your choice</td>
 </tr>
+<tr>
+<td>🍪 <b>Cookie authentication</b><br>Bypass YouTube bot detection via browser cookies or a cookies.txt file</td>
+<td></td>
+</tr>
 </table>
 
 ---
@@ -88,6 +92,8 @@ Environment overrides use the prefix `TRANSCRIBE_` and match the config keys:
 TRANSCRIBE_MODEL=small
 TRANSCRIBE_DEVICE=cpu
 TRANSCRIBE_PROJECT_ROOT=/data/transcripts
+TRANSCRIBE_COOKIES_FROM_BROWSER=chrome
+TRANSCRIBE_COOKIES_FILE=/path/to/cookies.txt
 ```
 
 </details>
@@ -179,6 +185,13 @@ transcribe ~/Downloads/example.m4a --output-dir ~/Downloads/transcripts
 # Verbose / quiet logging
 transcribe -v clip.wav   # DEBUG: timestamped, module-named log lines
 transcribe -q clip.wav   # WARNING+ only; suppresses the progress line
+
+# Bypass YouTube bot detection using browser cookies
+transcribe --cookies-from-browser chrome https://youtu.be/abc123
+transcribe --cookies-from-browser firefox https://youtu.be/abc123
+
+# Use an exported cookies.txt file instead
+transcribe --cookies ~/cookies.txt https://youtu.be/abc123
 ```
 
 ---
@@ -195,6 +208,23 @@ transcribe -q clip.wav   # WARNING+ only; suppresses the progress line
 ---
 
 ## Troubleshooting
+
+### YouTube: "Sign in to confirm you're not a bot"
+
+YouTube increasingly blocks unauthenticated yt-dlp downloads. Pass your browser's cookie
+session to authenticate the download:
+
+```bash
+# Read cookies from an installed browser (chrome, firefox, edge, chromium, safari)
+transcribe --cookies-from-browser chrome https://youtu.be/abc123
+
+# Or set it once in ~/.config/transcribe/config.toml so you never need the flag:
+# cookies_from_browser = "chrome"
+```
+
+If browser cookie extraction fails (e.g. in headless environments), export a `cookies.txt`
+from your browser using an extension like [Get cookies.txt LOCALLY](https://github.com/kairi003/Get-cookies.txt-LOCALLY)
+and pass it with `--cookies ~/cookies.txt`.
 
 ### `libcublas.so.12 is not found`
 
