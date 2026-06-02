@@ -84,6 +84,8 @@ Expected: `ModuleNotFoundError: No module named 'transcribe.progress'`
 
 - [ ] **Step 3: Create `src/transcribe/progress.py` with the pure helpers**
 
+(Note: In v0.2.0 the two-bar state was later refactored to a small internal `_TwoBarRenderer` class + state dict to address globals/PLW0603/fragility identified in review. Public API unchanged. See main plan and git history.)
+
 ```python
 import logging
 import sys
