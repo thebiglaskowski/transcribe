@@ -6,7 +6,38 @@ import time
 
 _BAR_WIDTH = 20
 _LABEL_WIDTH = 12
-_two_bar_initialized: bool = False
+
+
+# Internal renderer to encapsulate two-bar cursor state.
+# Replaces previous module global `_two_bar_initialized` (which triggered PLW0603
+# and was fragile). Public draw_two_bars/reset_two_bars signatures are unchanged
+# for minimal caller impact in transcribe.py + tests.
+class _TwoBarRenderer:
+    def __init__(self) -> None:
+        self._initialized: bool = False
+
+    def draw(self, pct: float, eta_str: str, file_index: int, file_total: int) -> None:
+        if not _should_render():
+            return
+        line1 = f"{'Transcribing':<{_LABEL_WIDTH}} {_render_bar(pct)} {pct:3.0f}%  {eta_str}"
+        fp = file_index / file_total * 100
+        line2 = (
+            f"{'Files':<{_LABEL_WIDTH}} {_render_bar(fp)}"
+            f" {file_index:>2}/{file_total}  file {file_index} of {file_total}"
+        )
+        if self._initialized:
+            print(f"\033[2A\r{line1}\n\r{line2}", end="", flush=True)
+        else:
+            print(f"\r{line1}\n\r{line2}", end="", flush=True)
+            self._initialized = True
+
+    def reset(self) -> None:
+        self._initialized = False
+        if _should_render():
+            print()
+
+
+_two_bar_state: dict = {"renderer": None}
 
 
 def _should_render() -> bool:
@@ -44,26 +75,16 @@ def finish_bar() -> None:
 
 
 def draw_two_bars(pct: float, eta_str: str, file_index: int, file_total: int) -> None:
-    global _two_bar_initialized
-    if not _should_render():
-        return
-    line1 = f"{'Transcribing':<{_LABEL_WIDTH}} {_render_bar(pct)} {pct:3.0f}%  {eta_str}"
-    fp = file_index / file_total * 100
-    line2 = (
-        f"{'Files':<{_LABEL_WIDTH}} {_render_bar(fp)}"
-        f" {file_index:>2}/{file_total}  file {file_index} of {file_total}"
-    )
-    if _two_bar_initialized:
-        print(f"\033[2A\r{line1}\n\r{line2}", end="", flush=True)
-    else:
-        print(f"\r{line1}\n\r{line2}", end="", flush=True)
-        _two_bar_initialized = True
+    if _two_bar_state["renderer"] is None:
+        _two_bar_state["renderer"] = _TwoBarRenderer()
+    _two_bar_state["renderer"].draw(pct, eta_str, file_index, file_total)
 
 
 def reset_two_bars() -> None:
-    global _two_bar_initialized
-    _two_bar_initialized = False
-    if _should_render():
+    if _two_bar_state["renderer"] is not None:
+        _two_bar_state["renderer"].reset()
+    elif _should_render():
+        # Preserve original behavior if never drawn yet
         print()
 
 
