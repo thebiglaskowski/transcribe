@@ -1,3 +1,4 @@
+import json
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -26,3 +27,40 @@ def write_srt(segments: list, output_path: Path) -> None:
         end = srt_timestamp(segment.end)
         lines.append(f"{index}\n{start} --> {end}\n{text}\n")
     output_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def write_json(segments: list, info: object, output_path: Path) -> None:
+    """Write a simple structured JSON transcript (coexists with .txt/.srt).
+
+    Includes top-level info from Whisper + per-segment data.
+    If word_timestamps were enabled, includes "words" arrays on segments.
+    """
+    segs: list[dict] = []
+    for segment in segments:
+        text = segment.text.strip()
+        if not text:
+            continue
+        d: dict = {
+            "start": segment.start,
+            "end": segment.end,
+            "text": text,
+        }
+        if hasattr(segment, "words") and segment.words:
+            d["words"] = [
+                {
+                    "start": w.start,
+                    "end": w.end,
+                    "word": w.word,
+                    "probability": getattr(w, "probability", None),
+                }
+                for w in segment.words
+            ]
+        segs.append(d)
+
+    data = {
+        "language": getattr(info, "language", None),
+        "language_probability": getattr(info, "language_probability", None),
+        "duration": getattr(info, "duration", None),
+        "segments": segs,
+    }
+    output_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
