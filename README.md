@@ -61,7 +61,9 @@ cd ~/code/transcribe
 uv tool install .
 ```
 
-This puts a `transcribe` command on your PATH. For development use an editable install instead:
+This puts a `transcribe` command on your PATH (CPU-only by default; see below for GPU).
+
+For development use an editable install instead:
 
 ```bash
 uv venv --python 3.11
@@ -69,9 +71,17 @@ source .venv/bin/activate
 uv pip install -e ".[dev]"
 ```
 
-GPU is auto-detected: when CUDA is present, `transcribe` locates `libcublas` and `libcudnn`
+**GPU support (optional):** The heavy NVIDIA CUDA wheels are not installed by default (keeps CPU-only installs small). To enable GPU:
+
+```bash
+uv tool install '.[cuda]'
+# or for development:
+uv pip install -e ".[dev,cuda]"
+```
+
+GPU is auto-detected: when the `[cuda]` extra is installed *and* CUDA is present, `transcribe` locates `libcublas` and `libcudnn`
 inside the installed `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` wheels and loads them in-process.
-No `LD_LIBRARY_PATH` setup needed.
+No `LD_LIBRARY_PATH` setup needed. If you run on CPU only, just omit the `[cuda]` extra.
 
 ---
 
@@ -169,6 +179,13 @@ transcribe --model large-v3
 # Write both .txt and .srt
 transcribe --srt
 
+# Write structured JSON (coexists with txt/srt; includes words if --word-timestamps)
+transcribe --json clip.mp3
+transcribe --json --word-timestamps clip.mp3
+
+# Enable word-level timestamps (richer data for --json or future use)
+transcribe --word-timestamps clip.mp3
+
 # Force GPU / CPU
 transcribe --device cuda
 transcribe --device cpu
@@ -185,6 +202,10 @@ transcribe ~/Downloads/example.m4a --output-dir ~/Downloads/transcripts
 # Verbose / quiet logging
 transcribe -v clip.wav   # DEBUG: timestamped, module-named log lines
 transcribe -q clip.wav   # WARNING+ only; suppresses the progress line
+
+# Version and model list
+transcribe --version
+transcribe --list-models
 
 # Bypass YouTube bot detection using browser cookies
 transcribe --cookies-from-browser chrome https://youtu.be/abc123
@@ -228,9 +249,15 @@ and pass it with `--cookies ~/cookies.txt`.
 
 ### `libcublas.so.12 is not found`
 
-The `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` wheels are missing from your install. Reinstall
-with `uv tool install --reinstall .`. If you intend to run on CPU only, pass `--device cpu` or
-set `device = "cpu"` in `~/.config/transcribe/config.toml`.
+The `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` wheels are missing from your install (they live in the optional `[cuda]` extra). Reinstall with the GPU extra:
+
+```bash
+uv tool install --reinstall '.[cuda]'
+# or for an editable dev install:
+uv pip install -e --reinstall ".[dev,cuda]"
+```
+
+If you intend to run on CPU only, simply omit the `[cuda]` extra (the default `uv tool install .` is now CPU-only and much lighter). You can still force CPU with `--device cpu` or `device = "cpu"` in `~/.config/transcribe/config.toml`.
 
 ### Check that WSL sees your GPU
 
@@ -251,6 +278,20 @@ print("GPU available:", cuda_available())
 PY
 ```
 
+### Missing ffmpeg (for URL / project downloads)
+
+Project mode (YouTube etc.) uses yt-dlp which requires `ffmpeg` for audio extraction.
+
+Error will now suggest: `sudo apt install ffmpeg`
+
+The `transcribe` CLI also checks early when URLs are passed.
+
+### GPU / CUDA failures
+
+If model load fails with CUDA errors, the error message now suggests `--device cpu` (or ensure the `[cuda]` extra + NVIDIA driver + `nvidia-smi` works).
+
+You can always force CPU: `transcribe --device cpu ...` (no `[cuda]` extra needed).
+
 ---
 
 ## Development
@@ -259,9 +300,11 @@ PY
 uv venv --python 3.11
 source .venv/bin/activate
 uv pip install -e ".[dev]"
-pytest
+pytest                       # ~49 pure unit tests (no audio fixtures)
 ruff check src/ tests/
 ruff format src/ tests/
+
+CI (GitHub Actions) runs the equivalent on ubuntu for py 3.11 + 3.12 (CPU path).
 ```
 
 ---

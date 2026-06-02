@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "transcribe"
-version = "0.1.0"
+version = "0.2.0"
 description = "Transcribe local audio/video files or video URLs with faster-whisper, GPU-aware in WSL2."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -21,14 +21,16 @@ dependencies = [
     "faster-whisper>=1.0",
     "yt-dlp>=2024.1",
     "curl_cffi>=0.7",
-    "nvidia-cublas-cu12",
-    "nvidia-cudnn-cu12==9.*",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7",
     "ruff>=0.6",
+]
+cuda = [
+    "nvidia-cublas-cu12",
+    "nvidia-cudnn-cu12==9.*",
 ]
 
 [project.scripts]
