@@ -95,3 +95,10 @@ def default_compute_type(device: str) -> str:
     if device == "cuda":
         return "float16"
     return "int8"
+
+
+def ffmpeg_available() -> bool:
+    """Return True if ffmpeg is in PATH (needed by yt-dlp for project/URL audio extraction)."""
+    import shutil
+
+    return shutil.which("ffmpeg") is not None

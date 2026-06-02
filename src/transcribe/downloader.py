@@ -38,7 +38,7 @@ def download_audio(
 
     outtmpl = str(project_dir / f"{stem}.%(ext)s")
     ydl_opts = {
-        "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio[ext=opus]/bestaudio/best",
+        "format": "bestaudio/best",
         "outtmpl": outtmpl,
         "postprocessors": [
             {
@@ -60,6 +60,13 @@ def download_audio(
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
+    except Exception as exc:  # yt_dlp may raise DownloadError etc.
+        if "ffmpeg" in str(exc).lower() or "ffprobe" in str(exc).lower():
+            raise RuntimeError(
+                "ffmpeg/ffprobe not found or failed. "
+                "URL mode requires `sudo apt install ffmpeg` (or your distro equivalent)."
+            ) from exc
+        raise
     finally:
         finish_bar()
 
