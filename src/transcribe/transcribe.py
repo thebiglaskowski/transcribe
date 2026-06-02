@@ -6,7 +6,7 @@ from pathlib import Path
 from faster_whisper import WhisperModel
 
 from .downloader import download_audio
-from .output import write_srt, write_txt
+from .output import write_json, write_srt, write_txt
 from .progress import (
     draw_bar,
     draw_two_bars,
@@ -17,7 +17,7 @@ from .progress import (
     spinner_stop,
 )
 from .prompts import prompt_for_audio_file, prompt_project_name
-from .utils import SUPPORTED_EXTENSIONS, default_compute_type, default_device
+from .utils import SUPPORTED_EXTENSIONS, default_compute_type, default_device, ffmpeg_available
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +26,7 @@ def transcribe_file(
     audio_path: Path,
     txt_path: Path,
     srt_path: Path | None,
+    json_path: Path | None,
     model: WhisperModel,
     args: argparse.Namespace,
     info_prefix: str = "",
@@ -45,6 +46,7 @@ def transcribe_file(
         beam_size=args.beam_size,
         vad_filter=use_vad,
         language=args.language,
+        word_timestamps=getattr(args, "word_timestamps", False),
     )
 
     segments: list = []
@@ -76,6 +78,8 @@ def transcribe_file(
     write_txt(segments, txt_path)
     if srt_path:
         write_srt(segments, srt_path)
+    if json_path:
+        write_json(segments, info, json_path)
 
     elapsed = time.time() - start_time
     logger.info("Language: %s (%.2f) | %.1fs", info.language, info.language_probability, elapsed)
@@ -85,6 +89,13 @@ def transcribe_file(
 
 def run_project_workflow(urls: list[str], args: argparse.Namespace, project_root: Path) -> int:
     project_name, project_dir = prompt_project_name(project_root)
+
+    if not ffmpeg_available():
+        logger.error(
+            "ffmpeg not found in PATH. URL/project mode requires it for audio extraction.\n"
+            "Install with: sudo apt install ffmpeg"
+        )
+        return 1
 
     device = default_device() if args.device == "auto" else args.device
     compute_type = args.compute_type or default_compute_type(device)
@@ -111,11 +122,16 @@ def run_project_workflow(urls: list[str], args: argparse.Namespace, project_root
 
         txt_path = project_dir / f"{stem}.txt"
         srt_path = (project_dir / f"{stem}.srt") if args.srt else None
+        json_path = None
+        if getattr(args, "json", False):
+            json_path = project_dir / f"{stem}.json"
 
         if txt_path.exists() and txt_path.stat().st_size > 0:
-            logger.info("  Skipping — transcript already exists: %s", txt_path.name)
-            successes += 1
-            continue
+            # Also consider json if --json was requested (simple resume)
+            if not json_path or (json_path.exists() and json_path.stat().st_size > 0):
+                logger.info("  Skipping — transcript already exists: %s", txt_path.name)
+                successes += 1
+                continue
 
         try:
             audio_path = download_audio(
@@ -127,6 +143,8 @@ def run_project_workflow(urls: list[str], args: argparse.Namespace, project_root
             )
         except Exception as exc:
             logger.error("Download failed: %s", exc)
+            if "ffmpeg" in str(exc).lower():
+                logger.error("Hint: install ffmpeg (sudo apt install ffmpeg)")
             failures += 1
             continue
 
@@ -135,6 +153,7 @@ def run_project_workflow(urls: list[str], args: argparse.Namespace, project_root
                 audio_path,
                 txt_path,
                 srt_path,
+                json_path,
                 model,
                 args,
                 info_prefix="  ",
@@ -148,7 +167,11 @@ def run_project_workflow(urls: list[str], args: argparse.Namespace, project_root
             else:
                 failures += 1
         except Exception as exc:
-            logger.error("Transcription failed: %s", exc)
+            msg = str(exc)
+            hint = ""
+            if "cuda" in msg.lower():
+                hint = " (try --device cpu)"
+            logger.error("Transcription failed: %s%s", exc, hint)
             failures += 1
 
     logger.info("\n%s", bar)
@@ -200,17 +223,22 @@ def run_multi_file_workflow(raw_paths: list[str], args: argparse.Namespace) -> i
         output_dir = output_dir_override or audio_path.parent
         txt_path = output_dir / f"{audio_path.stem}.txt"
         srt_path = (output_dir / f"{audio_path.stem}.srt") if args.srt else None
+        json_path = None
+        if getattr(args, "json", False):
+            json_path = output_dir / f"{audio_path.stem}.json"
 
         if txt_path.exists() and txt_path.stat().st_size > 0:
-            logger.info("  Skipping — transcript already exists: %s", txt_path.name)
-            successes += 1
-            continue
+            if not json_path or (json_path.exists() and json_path.stat().st_size > 0):
+                logger.info("  Skipping — transcript already exists: %s", txt_path.name)
+                successes += 1
+                continue
 
         try:
             ok = transcribe_file(
                 audio_path,
                 txt_path,
                 srt_path,
+                json_path,
                 model,
                 args,
                 info_prefix="  ",
@@ -224,7 +252,11 @@ def run_multi_file_workflow(raw_paths: list[str], args: argparse.Namespace) -> i
             else:
                 failures += 1
         except Exception as exc:
-            logger.error("Transcription failed: %s", exc)
+            msg = str(exc)
+            hint = ""
+            if "cuda" in msg.lower():
+                hint = " (try --device cpu)"
+            logger.error("Transcription failed: %s%s", exc, hint)
             failures += 1
 
     logger.info("\n%s", bar)
@@ -256,6 +288,7 @@ def run_single_file_workflow(raw_path: str | None, args: argparse.Namespace) -> 
 
     txt_path = output_dir / f"{audio_path.stem}.txt"
     srt_path = (output_dir / f"{audio_path.stem}.srt") if args.srt else None
+    json_path = (output_dir / f"{audio_path.stem}.json") if getattr(args, "json", False) else None
 
     logger.info("")
     _spinner = spinner_start(f"Loading model {args.model}…")
@@ -266,11 +299,15 @@ def run_single_file_workflow(raw_path: str | None, args: argparse.Namespace) -> 
     logger.info("Device: %s | Compute type: %s", device, compute_type)
 
     try:
-        ok = transcribe_file(audio_path, txt_path, srt_path, model, args)
+        ok = transcribe_file(audio_path, txt_path, srt_path, json_path, model, args)
         if ok and args.cleanup:
             audio_path.unlink()
             logger.info("Deleted: %s", audio_path)
         return 0 if ok else 1
     except Exception as exc:
-        logger.error("\nTranscription failed: %s", exc)
+        msg = str(exc)
+        hint = ""
+        if "cuda" in msg.lower() or "cublas" in msg.lower() or "cudnn" in msg.lower():
+            hint = " (try --device cpu or install the [cuda] extra + NVIDIA drivers)"
+        logger.error("\nTranscription failed: %s%s", exc, hint)
         return 1

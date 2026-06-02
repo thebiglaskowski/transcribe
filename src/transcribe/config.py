@@ -15,6 +15,7 @@ class Settings:
     beam_size: int = 5
     vad: bool = True
     srt: bool = False
+    word_timestamps: bool = False
     language: str | None = None
     cleanup: bool = False
     project_root: Path = field(default_factory=lambda: Path("projects"))
@@ -33,10 +34,11 @@ DEFAULT_CONFIG_TEMPLATE = """\
 # beam_size = 5
 # vad = true
 # srt = false
+# word_timestamps = false
 # language = "en"                # leave unset for auto-detect
 # cleanup = false
 # project_root = "projects"           # relative to cwd; use an absolute path to fix it globally
-# cookies_from_browser = "chrome"     # browser to pull cookies from: chrome, firefox, chromium, edge, safari
+# cookies_from_browser = "chrome"     # browser: chrome, firefox, chromium, edge, safari
 # cookies_file = ""                   # path to a Netscape-format cookies.txt file
 """
 
@@ -52,6 +54,7 @@ _ENV_MAP: dict[str, tuple[str, Callable[[str], object]]] = {
     "TRANSCRIBE_BEAM_SIZE": ("beam_size", int),
     "TRANSCRIBE_VAD": ("vad", _parse_bool),
     "TRANSCRIBE_SRT": ("srt", _parse_bool),
+    "TRANSCRIBE_WORD_TIMESTAMPS": ("word_timestamps", _parse_bool),
     "TRANSCRIBE_LANGUAGE": ("language", str),
     "TRANSCRIBE_CLEANUP": ("cleanup", _parse_bool),
     "TRANSCRIBE_PROJECT_ROOT": ("project_root", lambda s: Path(s).expanduser()),
