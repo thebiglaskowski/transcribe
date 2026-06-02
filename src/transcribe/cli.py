@@ -2,8 +2,10 @@ import argparse
 import logging
 from pathlib import Path
 
+from . import __version__
 from . import config as cfg
 from .prompts import (
+    MODELS,
     prompt_for_batch_files,
     prompt_for_urls,
     prompt_mode_menu,
@@ -14,7 +16,7 @@ from .transcribe import (
     run_project_workflow,
     run_single_file_workflow,
 )
-from .utils import is_url, resolve_cuda_libs
+from .utils import ffmpeg_available, is_url, resolve_cuda_libs
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,18 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         help="Also write an .srt subtitle file.",
     )
     parser.add_argument(
+        "--word-timestamps",
+        action="store_true",
+        default=defaults["word_timestamps"],
+        help="Enable word-level timestamps (if supported by the model).",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        default=False,  # CLI-only for now; not in layered config
+        help="Also write a .json file with segments (and word timestamps if --word-timestamps).",
+    )
+    parser.add_argument(
         "--language",
         default=defaults["language"],
         help="Source language code (e.g. en, es, fr). Default: auto-detect.",
@@ -95,13 +109,27 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         "--cookies-from-browser",
         default=defaults["cookies_from_browser"],
         metavar="BROWSER",
-        help="Pass cookies from an installed browser to bypass bot detection (e.g. chrome, firefox, edge).",
+        help=(
+            "Pass cookies from an installed browser to bypass bot detection "
+            "(e.g. chrome, firefox, edge, chromium, safari)."
+        ),
     )
     parser.add_argument(
         "--cookies",
         default=defaults["cookies_file"],
         metavar="FILE",
         help="Path to a Netscape-format cookies.txt file for authenticated downloads.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+        help="Show version and exit.",
+    )
+    parser.add_argument(
+        "--list-models",
+        action="store_true",
+        help="List available Whisper models and exit.",
     )
     verbosity = parser.add_mutually_exclusive_group()
     verbosity.add_argument(
@@ -161,6 +189,21 @@ def main() -> int:
     parser = build_parser(merged)
     args = parser.parse_args()
     _configure_logging(args.verbose, args.quiet)
+
+    if args.list_models:
+        for name, desc in MODELS:
+            print(f"  {name:10} {desc}")
+        return 0
+
+    # Early check for ffmpeg (required for yt-dlp audio extraction in URL/project mode)
+    if args.inputs and any(is_url(u) for u in args.inputs):
+        if not ffmpeg_available():
+            logger.error(
+                "ffmpeg not found in PATH. URL/project mode requires ffmpeg for audio extraction.\n"
+                "Install it (e.g. `sudo apt install ffmpeg`) and try again."
+            )
+            return 1
+
     resolve_cuda_libs()
     project_root = Path(args.project_root).expanduser()
 

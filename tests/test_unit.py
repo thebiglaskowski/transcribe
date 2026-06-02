@@ -1,3 +1,4 @@
+import json
 import logging
 import sys
 import time
@@ -9,7 +10,7 @@ import pytest
 
 from transcribe import config as cfg
 from transcribe.cli import _classify_inputs
-from transcribe.output import write_srt, write_txt
+from transcribe.output import write_json, write_srt, write_txt
 from transcribe.progress import _fmt_eta, _render_bar
 from transcribe.utils import is_url, sanitize_project_name, srt_timestamp
 
@@ -69,6 +70,23 @@ def test_write_srt_numbers_and_timestamps(tmp_path: Path):
     assert "2\n00:00:02,000 --> 00:00:03,250\nthere" in content
     # The blank segment must not appear and must not bump the index.
     assert "3\n" not in content
+
+
+def test_write_json_basic(tmp_path: Path):
+    segments = [
+        _Segment(text="hi", start=0.0, end=1.5),
+        _Segment(text="", start=1.5, end=2.0),  # blank, skipped
+        _Segment(text="there", start=2.0, end=3.25),
+    ]
+    info = type("Info", (), {"language": "en", "language_probability": 0.99, "duration": 3.25})()
+    out = tmp_path / "x.json"
+    write_json(segments, info, out)  # type: ignore[arg-type]
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert data["language"] == "en"
+    assert data["duration"] == 3.25
+    assert len(data["segments"]) == 2
+    assert data["segments"][0]["text"] == "hi"
+    assert "words" not in data["segments"][0]  # no words unless provided by real segments
 
 
 # ---------- is_url ----------
@@ -143,6 +161,56 @@ def test_classify_mixed():
     assert mixed is True
 
 
+# ---------- CLI parser flags (version, list-models) ----------
+
+
+def test_build_parser_has_version_and_list_models():
+    from transcribe.cli import build_parser
+
+    # build_parser requires the full merged defaults dict (used in help strings etc.)
+    defaults = {
+        "model": "turbo",
+        "device": "auto",
+        "compute_type": None,
+        "beam_size": 5,
+        "vad": True,
+        "srt": False,
+        "word_timestamps": False,
+        "language": None,
+        "cleanup": False,
+        "project_root": "projects",
+        "cookies_from_browser": None,
+        "cookies_file": None,
+    }
+    parser = build_parser(defaults)
+    # version action exists (dest='version' for the action)
+    assert any(getattr(a, "dest", None) == "version" for a in parser._actions)
+    # list-models flag
+    assert any(getattr(a, "dest", None) == "list_models" for a in parser._actions)
+
+
+def test_list_models_flag_in_namespace():
+    from transcribe.cli import build_parser
+
+    defaults = {
+        "model": "turbo",
+        "device": "auto",
+        "compute_type": None,
+        "beam_size": 5,
+        "vad": True,
+        "srt": False,
+        "word_timestamps": False,
+        "language": None,
+        "cleanup": False,
+        "project_root": "projects",
+        "cookies_from_browser": None,
+        "cookies_file": None,
+    }
+    parser = build_parser(defaults)
+    args = parser.parse_args(["--list-models"])
+    assert args.list_models is True
+
+
 # ---------- config: env parsing + merge precedence ----------
 
 
@@ -153,6 +221,7 @@ def test_load_env_parses_types():
         "TRANSCRIBE_VAD": "no",
         "TRANSCRIBE_CLEANUP": "yes",
         "TRANSCRIBE_PROJECT_ROOT": "~/foo",
+        "TRANSCRIBE_WORD_TIMESTAMPS": "true",
         "UNRELATED": "ignore-me",
     }
     out = cfg.load_env(env)
@@ -161,6 +230,7 @@ def test_load_env_parses_types():
     assert out["vad"] is False
     assert out["cleanup"] is True
     assert out["project_root"] == Path("~/foo").expanduser()
+    assert out["word_timestamps"] is True
     assert "UNRELATED" not in out
 
 
@@ -183,6 +253,7 @@ def test_merge_env_overrides_file_overrides_defaults():
 
     # default wins for keys neither layer supplied
     assert merged["vad"] is True
+    assert merged["word_timestamps"] is False
 
 
 def test_load_file_creates_template_when_missing(tmp_path: Path):
@@ -191,7 +262,9 @@ def test_load_file_creates_template_when_missing(tmp_path: Path):
     result = cfg.load_file(p)
     assert result == {}
     assert p.exists()
-    assert "# transcribe — user configuration" in p.read_text(encoding="utf-8")
+    text = p.read_text(encoding="utf-8")
+    assert "# transcribe — user configuration" in text
+    assert "# word_timestamps = false" in text
 
 
 def test_load_file_expands_project_root_path(tmp_path: Path):
@@ -316,7 +389,7 @@ def test_spinner_stop_noop_thread_does_not_raise():
 def test_spinner_stop_live_thread_joins_cleanly(monkeypatch):
     from transcribe.progress import spinner_start, spinner_stop
 
-    buf = _tty_buf(monkeypatch)
+    _tty_buf(monkeypatch)
     thread = spinner_start("Loading model...")
     time.sleep(0.05)
     spinner_stop(thread)
@@ -325,6 +398,15 @@ def test_spinner_stop_live_thread_joins_cleanly(monkeypatch):
 
 
 # ---------- draw_two_bars, reset_two_bars ----------
+
+
+def test_two_bar_renderer_class_exists():
+    """TDD guard: class must exist to encapsulate two-bar state (fixes global/PLW0603)."""
+    from transcribe.progress import _TwoBarRenderer
+
+    r = _TwoBarRenderer()
+    assert hasattr(r, "draw")
+    assert hasattr(r, "reset")
 
 
 def test_draw_two_bars_first_render_no_cursor_up(monkeypatch):
