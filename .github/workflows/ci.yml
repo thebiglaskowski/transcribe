@@ -20,6 +20,7 @@ jobs:
         uses: astral-sh/setup-uv@v8.1.0
         with:
           python-version: ${{ matrix.python-version }}
+          activate-environment: true
 
       - name: Install package (dev)
         run: uv pip install -e ".[dev]"
