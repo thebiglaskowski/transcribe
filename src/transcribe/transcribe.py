@@ -8,18 +8,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from faster_whisper import BatchedInferencePipeline, WhisperModel, decode_audio
+from rich.text import Text
 
 from .downloader import download_audio, list_sources
 from .output import source_header, write_json, write_srt, write_txt
-from .progress import (
-    draw_bar,
-    draw_two_bars,
-    finish_bar,
-    fmt_eta,
-    reset_two_bars,
-    spinner_start,
-    spinner_stop,
-)
+from .progress import display, fmt_duration, status, tracker
 from .prompts import (
     prompt_for_audio_file,
     prompt_pick_sources,
@@ -69,16 +62,42 @@ def load_diarizer(device: str):
 
 
 def _load_models(args: argparse.Namespace, device: str, compute_type: str):
-    _spinner = spinner_start(f"Loading model {args.model}…")
-    try:
+    with status(f"🧠 Loading {args.model} on {device}…"):
         model = WhisperModel(args.model, device=device, compute_type=compute_type)
-        diarizer = load_diarizer(device) if getattr(args, "diarize", False) else None
-    finally:
-        spinner_stop(_spinner)
-    logger.info("Device: %s | Compute type: %s", device, compute_type)
-    if diarizer:
-        logger.info("Speaker labels: on")
+    diarizer = None
+    if getattr(args, "diarize", False):
+        with status("👥 Loading the speaker model…"):
+            diarizer = load_diarizer(device)
+    logger.info(
+        Text.assemble(
+            "\n🎧 ",
+            (args.model, "bold cyan"),
+            (f" · {device} {compute_type}", "dim"),
+            (" · 👥 speaker labels", "dim") if diarizer else "",
+        )
+    )
     return model, diarizer
+
+
+def _done_line(title: str, summary: dict) -> Text:
+    """One finished-item line: ✅ Title  12:31 · 👥 2 · ⚡ 0:38"""
+    if summary["no_speech"]:
+        return Text.assemble("🔇 ", (display(title), "bold"), ("  no speech", "dim"))
+    bits = [fmt_duration(summary["duration"])]
+    if summary["speakers"] is not None:
+        bits.append(f"👥 {summary['speakers']}")
+    bits.append(f"⚡ {fmt_duration(summary['elapsed'])}")
+    return Text.assemble("✅ ", (display(title), "bold"), ("  " + " · ".join(bits), "dim"))
+
+
+def _summary_line(successes: int, failures: int, started: float) -> Text:
+    return Text.assemble(
+        "\n🎉 " if not failures else "\n🏁 ",
+        ("Done", "bold green" if not failures else "bold yellow"),
+        f" — {successes} transcribed",
+        (f" · {failures} failed", "bold red") if failures else "",
+        (f" · {fmt_duration(time.time() - started)}", "dim"),
+    )
 
 
 def speaker_turns(diarizer, audio) -> list[tuple[float, float, str]]:
@@ -154,20 +173,20 @@ def transcribe_file(
     json_path: Path | None,
     model: WhisperModel,
     args: argparse.Namespace,
-    info_prefix: str = "",
-    file_progress: tuple[int, int] | None = None,
     diarizer=None,
     header: str | None = None,
-) -> bool:
-    """Transcribe a single audio file. Returns True on success."""
-    logger.info("\n%sInput:  %s", info_prefix, audio_path)
-    logger.info("%sOutput: %s", info_prefix, txt_path)
-    if srt_path:
-        logger.info("%sSRT:    %s", info_prefix, srt_path)
+    report=lambda stage, pct=None: None,
+) -> dict:
+    """Transcribe one audio file and write its outputs.
 
+    `report(stage_emoji, pct)` receives progress (pct=None: working, no percentage).
+    Returns {"duration", "speakers" (None unless diarized), "no_speech", "elapsed"}.
+    """
+    logger.debug("Input: %s → %s", audio_path, txt_path)
     start_time = time.time()
     use_vad = not args.no_vad
 
+    report("📝")
     audio = decode_audio(str(audio_path))
     options = dict(
         beam_size=args.beam_size,
@@ -185,42 +204,22 @@ def transcribe_file(
         segments_iter, info = model.transcribe(audio, vad_filter=False, **options)
 
     segments: list = []
-    try:
-        for segment in segments_iter:
-            segments.append(segment)
-            if info.duration:
-                pct = min(100.0, segment.end / info.duration * 100)
-                elapsed = time.time() - start_time
-                remaining = elapsed / max(pct / 100, 0.001) - elapsed
-                eta = fmt_eta(remaining)
-            else:
-                pct = 0.0
-                eta = ""
-            if file_progress is not None:
-                draw_two_bars(pct, eta, *file_progress)
-            else:
-                draw_bar("Transcribing", pct, eta)
-    finally:
-        if file_progress is not None:
-            reset_two_bars()
-        else:
-            finish_bar()
+    for segment in segments_iter:
+        segments.append(segment)
+        if info.duration:
+            report("📝", min(100.0, segment.end / info.duration * 100))
 
-    if not segments:
+    no_speech = not segments
+    if no_speech:
         # A placeholder (not a missing file) so resume skips music-only videos instead of
         # re-downloading them on every channel re-sync.
-        logger.warning("%sNo speech detected; writing a placeholder.", info_prefix)
         segments = [SimpleNamespace(start=0.0, end=0.0, text="[no speech detected]", words=[])]
         diarizer = None
 
     speakers = None
     if diarizer:
-        _spinner = spinner_start("Identifying speakers…")
-        try:
-            segments, speakers = split_by_speaker(segments, speaker_turns(diarizer, audio))
-        finally:
-            spinner_stop(_spinner)
-        logger.info("%sSpeakers: %d", info_prefix, len({s for s in speakers if s}))
+        report("👥")
+        segments, speakers = split_by_speaker(segments, speaker_turns(diarizer, audio))
 
     write_txt(segments, txt_path, speakers, header)
     if srt_path:
@@ -228,10 +227,20 @@ def transcribe_file(
     if json_path:
         write_json(segments, info, json_path, speakers)
 
-    elapsed = time.time() - start_time
-    logger.info("Language: %s (%.2f) | %.1fs", info.language, info.language_probability, elapsed)
-    logger.info("Saved: %s", txt_path)
-    return True
+    logger.debug("Language: %s (%.2f)", info.language, info.language_probability)
+    return {
+        "duration": info.duration,
+        "speakers": len({s for s in speakers if s}) if speakers is not None else None,
+        "no_speech": no_speech,
+        "elapsed": time.time() - start_time,
+    }
+
+
+def _failure_hint(exc: Exception) -> str:
+    msg = str(exc).lower()
+    if any(k in msg for k in ("cuda", "cublas", "cudnn")):
+        return " (try --device cpu, or install the [cuda] extra + NVIDIA drivers)"
+    return ""
 
 
 def _plan_sources(urls: list[str], cookies: dict) -> tuple[list[tuple[str | None, list]], int]:
@@ -245,13 +254,11 @@ def _plan_sources(urls: list[str], cookies: dict) -> tuple[list[tuple[str | None
     sources: list[tuple[str | None, list]] = []
     failed = 0
     for url in urls:
-        _spinner = spinner_start(f"Looking up {url}…")
         try:
-            groups = list_sources(url, **cookies)
+            with status(f"🔎 Looking up {url}…"):  # closed before any prompt below
+                groups = list_sources(url, **cookies)
         except Exception as exc:
             groups = exc
-        finally:
-            spinner_stop(_spinner)
         if isinstance(groups, Exception):
             logger.error("Could not read %s: %s", url, groups)
             failed += 1
@@ -285,49 +292,47 @@ def _process_project(
 ) -> tuple[int, int]:
     """Download + transcribe each pending video into project_dir. Returns (succeeded, failed)."""
     successes = failures = 0
-    bar = "=" * 60
-    for i, v in enumerate(pending, start=1):
-        logger.info("\n%s", bar)
-        logger.info("[%d/%d] %s", i, len(pending), v["title"] or v["url"])
-        logger.info("%s", bar)
-        txt_path, srt_path, json_path = _outputs(project_dir, v["stem"], args)
-
-        try:
-            audio_path, info = download_audio(v["url"], project_dir, v["stem"], **cookies)
-        except Exception as exc:
-            logger.error("Download failed: %s", exc)
-            if "ffmpeg" in str(exc).lower():
-                logger.error("Hint: install ffmpeg (sudo apt install ffmpeg)")
-            failures += 1
-            continue
-
-        try:
-            ok = transcribe_file(
-                audio_path,
-                txt_path,
-                srt_path,
-                json_path,
-                model,
-                args,
-                info_prefix="  ",
-                file_progress=(i, len(pending)),
-                diarizer=diarizer,
-                header=source_header(info),
-            )
-            if ok:
+    with tracker(project_dir.name, len(pending)) as t:
+        for v in pending:
+            title = v["title"] or v["url"]
+            t.start(title)
+            txt_path, srt_path, json_path = _outputs(project_dir, v["stem"], args)
+            try:
+                audio_path, info = download_audio(
+                    v["url"],
+                    project_dir,
+                    v["stem"],
+                    **cookies,
+                    on_progress=lambda pct: t.stage("📥", pct),
+                )
+            except Exception as exc:
+                logger.error("%s — download failed: %s", display(title), exc)
+                failures += 1
+                t.advance()
+                continue
+            try:
+                summary = transcribe_file(
+                    audio_path,
+                    txt_path,
+                    srt_path,
+                    json_path,
+                    model,
+                    args,
+                    diarizer=diarizer,
+                    header=source_header(info),
+                    report=t.stage,
+                )
+                logger.info(_done_line(title, summary))
                 successes += 1
                 if args.cleanup:
                     audio_path.unlink()
-                    logger.info("Deleted: %s", audio_path)
-            else:
+                    logger.debug("Deleted: %s", audio_path)
+            except Exception as exc:
+                logger.error(
+                    "%s — transcription failed: %s%s", display(title), exc, _failure_hint(exc)
+                )
                 failures += 1
-        except Exception as exc:
-            msg = str(exc)
-            hint = ""
-            if "cuda" in msg.lower():
-                hint = " (try --device cpu)"
-            logger.error("Transcription failed: %s%s", exc, hint)
-            failures += 1
+            t.advance()
     return successes, failures
 
 
@@ -365,31 +370,38 @@ def run_project_workflow(urls: list[str], args: argparse.Namespace, project_root
         successes += len(videos) - len(pending)
         projects.append((project_dir, pending))
         already = len(videos) - len(pending)
-        skipped = f" ({already} already transcribed, skipped)" if already else ""
-        logger.info("  %s: %d to process%s", project_dir, len(pending), skipped)
+        logger.info(
+            Text.assemble(
+                "📁 ",
+                (project_dir.name, "bold magenta"),
+                f"  {len(pending)} to transcribe",
+                (f" · {already} already done", "dim") if already else "",
+            )
+        )
 
     if not any(pending for _, pending in projects):
         return 0 if failures == 0 else 1
 
     device = default_device() if args.device == "auto" else args.device
     compute_type = args.compute_type or default_compute_type(device)
+    started = time.time()
     model, diarizer = _load_models(args, device, compute_type)
 
-    for n, (project_dir, pending) in enumerate(projects, start=1):
+    for project_dir, pending in projects:
         if not pending:
             continue
-        if len(projects) > 1:
-            logger.info(
-                "\n### Project %d/%d: %s (%d videos)", n, len(projects), project_dir, len(pending)
+        logger.info(
+            Text.assemble(
+                "\n📺 ", (project_dir.name, "bold magenta"), (f"  {len(pending)} videos", "dim")
             )
+        )
         ok, failed = _process_project(project_dir, pending, args, model, diarizer, cookies)
         successes += ok
         failures += failed
 
-    logger.info("\n%s", "=" * 60)
-    logger.info("Done. %d succeeded, %d failed.", successes, failures)
+    logger.info(_summary_line(successes, failures, started))
     for project_dir, _ in projects:
-        logger.info("Transcripts saved in: %s", project_dir)
+        logger.info(Text.assemble("📁 ", (str(project_dir), "dim")))
     return 0 if failures == 0 else 1
 
 
@@ -409,67 +421,52 @@ def run_multi_file_workflow(raw_paths: list[str], args: argparse.Namespace) -> i
             return 1
         paths.append(p)
 
-    device = default_device() if args.device == "auto" else args.device
-    compute_type = args.compute_type or default_compute_type(device)
-
-    logger.info("\nFiles to process: %d", len(paths))
-
-    model, diarizer = _load_models(args, device, compute_type)
-
     output_dir_override = Path(args.output_dir).expanduser() if args.output_dir else None
     if output_dir_override:
         output_dir_override.mkdir(parents=True, exist_ok=True)
 
-    successes = 0
-    failures = 0
-    bar = "=" * 60
+    def outputs(path: Path):
+        out = output_dir_override or path.parent
+        return _outputs(out, path.stem, args)
 
-    for i, audio_path in enumerate(paths, start=1):
-        logger.info("\n%s", bar)
-        logger.info("[%d/%d] %s", i, len(paths), audio_path.name)
-        logger.info("%s", bar)
-        output_dir = output_dir_override or audio_path.parent
-        txt_path = output_dir / f"{audio_path.stem}.txt"
-        srt_path = (output_dir / f"{audio_path.stem}.srt") if args.srt else None
-        json_path = None
-        if getattr(args, "json", False):
-            json_path = output_dir / f"{audio_path.stem}.json"
+    pending = [p for p in paths if not _is_done(outputs(p)[0].parent, p.stem, args)]
+    already = len(paths) - len(pending)
+    logger.info(
+        Text.assemble(
+            "\n📂 ",
+            f"{len(pending)} files to transcribe",
+            (f" · {already} already done", "dim") if already else "",
+        )
+    )
+    if not pending:
+        return 0
 
-        if txt_path.exists() and txt_path.stat().st_size > 0:
-            if not json_path or (json_path.exists() and json_path.stat().st_size > 0):
-                logger.info("  Skipping — transcript already exists: %s", txt_path.name)
-                successes += 1
-                continue
+    started = time.time()
+    device = default_device() if args.device == "auto" else args.device
+    compute_type = args.compute_type or default_compute_type(device)
+    model, diarizer = _load_models(args, device, compute_type)
 
-        try:
-            ok = transcribe_file(
-                audio_path,
-                txt_path,
-                srt_path,
-                json_path,
-                model,
-                args,
-                info_prefix="  ",
-                file_progress=(i, len(paths)),
-                diarizer=diarizer,
-            )
-            if ok:
+    successes, failures = already, 0
+    with tracker("Files", len(pending)) as t:
+        for audio_path in pending:
+            t.start(audio_path.name)
+            try:
+                summary = transcribe_file(
+                    audio_path, *outputs(audio_path), model, args, diarizer=diarizer, report=t.stage
+                )
+                logger.info(_done_line(audio_path.name, summary))
                 successes += 1
                 if args.cleanup:
                     audio_path.unlink()
-                    logger.info("Deleted: %s", audio_path)
-            else:
+                    logger.debug("Deleted: %s", audio_path)
+            except Exception as exc:
+                logger.error(
+                    "%s — transcription failed: %s%s", audio_path.name, exc, _failure_hint(exc)
+                )
                 failures += 1
-        except Exception as exc:
-            msg = str(exc)
-            hint = ""
-            if "cuda" in msg.lower():
-                hint = " (try --device cpu)"
-            logger.error("Transcription failed: %s%s", exc, hint)
-            failures += 1
+            t.advance()
 
-    logger.info("\n%s", bar)
-    logger.info("Done. %d succeeded, %d failed.", successes, failures)
+    logger.info(_summary_line(successes, failures, started))
     return 0 if failures == 0 else 1
 
 
@@ -499,21 +496,27 @@ def run_single_file_workflow(raw_path: str | None, args: argparse.Namespace) -> 
     srt_path = (output_dir / f"{audio_path.stem}.srt") if args.srt else None
     json_path = (output_dir / f"{audio_path.stem}.json") if getattr(args, "json", False) else None
 
-    logger.info("")
     model, diarizer = _load_models(args, device, compute_type)
 
     try:
-        ok = transcribe_file(
-            audio_path, txt_path, srt_path, json_path, model, args, diarizer=diarizer
-        )
-        if ok and args.cleanup:
-            audio_path.unlink()
-            logger.info("Deleted: %s", audio_path)
-        return 0 if ok else 1
+        with tracker() as t:
+            t.start(audio_path.name)
+            summary = transcribe_file(
+                audio_path,
+                txt_path,
+                srt_path,
+                json_path,
+                model,
+                args,
+                diarizer=diarizer,
+                report=t.stage,
+            )
     except Exception as exc:
-        msg = str(exc)
-        hint = ""
-        if "cuda" in msg.lower() or "cublas" in msg.lower() or "cudnn" in msg.lower():
-            hint = " (try --device cpu or install the [cuda] extra + NVIDIA drivers)"
-        logger.error("\nTranscription failed: %s%s", exc, hint)
+        logger.error("Transcription failed: %s%s", exc, _failure_hint(exc))
         return 1
+    logger.info(_done_line(audio_path.name, summary))
+    logger.info(Text.assemble("📄 ", (str(txt_path), "dim")))
+    if args.cleanup:
+        audio_path.unlink()
+        logger.debug("Deleted: %s", audio_path)
+    return 0

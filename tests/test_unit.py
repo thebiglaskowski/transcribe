@@ -1,7 +1,5 @@
 import json
 import logging
-import sys
-import time
 from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
@@ -11,7 +9,6 @@ import pytest
 from transcribe import config as cfg
 from transcribe.cli import _classify_inputs
 from transcribe.output import write_json, write_srt, write_txt
-from transcribe.progress import _fmt_eta, _render_bar
 from transcribe.utils import is_url, sanitize_project_name, srt_timestamp
 
 
@@ -276,222 +273,89 @@ def test_load_file_expands_project_root_path(tmp_path: Path):
     assert result["project_root"] == Path("~/custom-root").expanduser()
 
 
-# ---------- progress helpers ----------
+# ---------- terminal output (progress.py) ----------
 
 
-def test_fmt_eta_seconds():
-    assert _fmt_eta(30) == "0:30 remaining"
+def test_fmt_duration():
+    from transcribe.progress import fmt_duration
 
+    assert fmt_duration(None) == "0:00"
+    assert fmt_duration(75.9) == "1:15"
+    assert fmt_duration(3725) == "1:02:05"
 
-def test_fmt_eta_over_minute():
-    assert _fmt_eta(90) == "1:30 remaining"
 
+def test_display_strips_width_ambiguous_emoji_modifiers():
+    from transcribe.progress import display
 
-def test_fmt_eta_zero_returns_empty():
-    assert _fmt_eta(0) == ""
+    assert display("Dance 🕺\ufe0f 👨\u200d👩") == "Dance 🕺 👨👩"
+    assert display(None) == ""
 
 
-def test_fmt_eta_negative_returns_empty():
-    assert _fmt_eta(-5) == ""
+def test_live_title_drops_symbol_emoji_and_collapses_spaces():
+    from transcribe.progress import live_title
 
+    title = "Dance in space! 🪩🕺\u00a0🛰\ufe0f Microgravity"
+    assert live_title(title) == "Dance in space! Microgravity"
 
-def test_fmt_eta_over_hour_returns_empty():
-    assert _fmt_eta(3700) == ""
 
+def _recording_console(monkeypatch):
+    from rich.console import Console
 
-def test_render_bar_zero_percent():
-    assert _render_bar(0) == "[" + "░" * 20 + "]"
+    import transcribe.progress as progress
 
+    rec = Console(file=StringIO(), width=100, record=True, color_system=None)
+    monkeypatch.setattr(progress, "console", rec)
+    return rec
 
-def test_render_bar_full():
-    assert _render_bar(100) == "[" + "█" * 20 + "]"
 
+def test_console_handler_prefixes_levels_and_passes_text_through(monkeypatch):
+    from rich.text import Text
 
-def test_render_bar_half():
-    bar = _render_bar(50)
-    assert bar == "[" + "█" * 10 + "░" * 10 + "]"
+    from transcribe.progress import ConsoleHandler
 
+    rec = _recording_console(monkeypatch)
+    log = logging.getLogger("transcribe.test_handler")
+    log.handlers[:] = [ConsoleHandler()]
+    log.propagate = False
+    log.setLevel(logging.INFO)
+    log.warning("slow [LIVE] %s", "down")  # brackets must survive (no markup parsing)
+    log.error("broke")
+    log.info(Text("✅ styled"))
+    assert rec.export_text() == "🟡 slow [LIVE] down\n❌ broke\n✅ styled\n"
 
-def test_render_bar_clamps_over_100():
-    assert _render_bar(150) == "[" + "█" * 20 + "]"
 
+def test_tracker_runs_without_a_terminal(monkeypatch):
+    from transcribe.progress import tracker
 
-# ---------- draw_bar, finish_bar, fmt_eta (public) ----------
+    _recording_console(monkeypatch)  # not a TTY → live region disabled, calls still work
+    with tracker("Chan", 2) as t:
+        t.start("A 🕺\ufe0f")
+        t.stage("📥", 40)
+        t.stage("📝")
+        t.stage("📝", 10)
+        t.advance()
+        t.advance()
+    assert t._overall_label() == "📺 Chan  [2/2]"
 
 
-def _tty_buf(monkeypatch) -> StringIO:
-    """Return a StringIO that masquerades as a TTY and patch sys.stdout to it."""
-    buf = StringIO()
-    buf.isatty = lambda: True
-    monkeypatch.setattr(sys, "stdout", buf)
-    logging.getLogger("transcribe").setLevel(logging.INFO)
-    return buf
-
-
-def test_fmt_eta_public_alias():
-    from transcribe.progress import fmt_eta
-
-    assert fmt_eta(30) == "0:30 remaining"
-
-
-def test_draw_bar_no_output_when_not_tty(monkeypatch, capsys):
-    from transcribe.progress import draw_bar
-
-    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
-    draw_bar("Test", 50.0, "0:10 remaining")
-    assert capsys.readouterr().out == ""
-
-
-def test_draw_bar_contains_label_pct_eta(monkeypatch):
-    from transcribe.progress import draw_bar
-
-    buf = _tty_buf(monkeypatch)
-    draw_bar("Transcribing", 73.0, "0:12 remaining")
-    out = buf.getvalue()
-    assert out.startswith("\r")
-    assert "Transcribing" in out
-    assert "73%" in out
-    assert "0:12 remaining" in out
-
-
-def test_draw_bar_no_eta_when_empty(monkeypatch):
-    from transcribe.progress import draw_bar
-
-    buf = _tty_buf(monkeypatch)
-    draw_bar("Transcribing", 50.0)
-    out = buf.getvalue()
-    assert "remaining" not in out
-
-
-def test_finish_bar_emits_newline(monkeypatch):
-    from transcribe.progress import finish_bar
-
-    buf = _tty_buf(monkeypatch)
-    finish_bar()
-    assert buf.getvalue() == "\n"
-
-
-def test_finish_bar_silent_when_not_tty(monkeypatch, capsys):
-    from transcribe.progress import finish_bar
-
-    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
-    finish_bar()
-    assert capsys.readouterr().out == ""
-
-
-def test_spinner_stop_noop_thread_does_not_raise():
-    from transcribe.progress import spinner_start, spinner_stop
-
-    # In test environment stdout is not a TTY, so spinner_start returns a no-op thread.
-    thread = spinner_start("Loading...")
-    spinner_stop(thread)
-    assert not thread.is_alive()
-
-
-def test_spinner_stop_live_thread_joins_cleanly(monkeypatch):
-    from transcribe.progress import spinner_start, spinner_stop
-
-    _tty_buf(monkeypatch)
-    thread = spinner_start("Loading model...")
-    time.sleep(0.05)
-    spinner_stop(thread)
-
-    assert not thread.is_alive()
-
-
-# ---------- draw_two_bars, reset_two_bars ----------
-
-
-def test_two_bar_renderer_class_exists():
-    """TDD guard: class must exist to encapsulate two-bar state (fixes global/PLW0603)."""
-    from transcribe.progress import _TwoBarRenderer
-
-    r = _TwoBarRenderer()
-    assert hasattr(r, "draw")
-    assert hasattr(r, "reset")
-
-
-def test_draw_two_bars_first_render_no_cursor_up(monkeypatch):
-    from transcribe.progress import draw_two_bars, reset_two_bars
-
-    buf = _tty_buf(monkeypatch)
-    reset_two_bars()  # ensure clean state
-    draw_two_bars(50.0, "0:05 remaining", 1, 3)
-    out = buf.getvalue()
-    assert "\033[2A" not in out
-    assert "Transcribing" in out
-    assert "Files" in out
-    reset_two_bars()
-
-
-def test_draw_two_bars_second_render_has_cursor_up(monkeypatch):
-    from transcribe.progress import draw_two_bars, reset_two_bars
-
-    buf = _tty_buf(monkeypatch)
-    reset_two_bars()
-    draw_two_bars(40.0, "0:06 remaining", 1, 3)
-    buf.seek(0)
-    buf.truncate()
-    draw_two_bars(50.0, "0:05 remaining", 1, 3)
-    assert "\033[2A" in buf.getvalue()
-    reset_two_bars()
-
-
-def test_reset_two_bars_clears_initialized_flag(monkeypatch):
-    from transcribe.progress import draw_two_bars, reset_two_bars
-
-    buf = _tty_buf(monkeypatch)
-    reset_two_bars()
-    draw_two_bars(50.0, "0:05 remaining", 1, 3)  # sets initialized=True
-    reset_two_bars()
-    buf.seek(0)
-    buf.truncate()
-    draw_two_bars(50.0, "0:05 remaining", 1, 3)  # should NOT have cursor-up
-    assert "\033[2A" not in buf.getvalue()
-    reset_two_bars()
-
-
-# ---------- download progress hook ----------
-
-
-def test_progress_hook_downloading_calls_draw_bar(monkeypatch):
+def test_progress_hook_reports_percent_and_skips_unknown_total():
     from transcribe.downloader import _make_progress_hook
 
-    drawn = []
-    # Patch the name as imported in downloader.py, not in progress.py
-    monkeypatch.setattr("transcribe.downloader.draw_bar", lambda *a, **kw: drawn.append(a))
-    hook = _make_progress_hook()
-    hook(
-        {
-            "status": "downloading",
-            "downloaded_bytes": 50_000_000,
-            "total_bytes": 100_000_000,
-        }
-    )
-    assert len(drawn) == 1
-    label, pct = drawn[0][0], drawn[0][1]
-    assert label == "Downloading"
-    assert abs(pct - 50.0) < 0.1
-
-
-def test_progress_hook_finished_calls_finish_bar(monkeypatch):
-    from transcribe.downloader import _make_progress_hook
-
-    finished = []
-    monkeypatch.setattr("transcribe.downloader.finish_bar", lambda: finished.append(True))
-    hook = _make_progress_hook()
+    seen = []
+    hook = _make_progress_hook(seen.append)
+    hook({"status": "downloading", "downloaded_bytes": 50, "total_bytes": 200})
+    hook({"status": "downloading", "downloaded_bytes": 10})  # no total yet
     hook({"status": "finished"})
-    assert finished == [True]
+    assert seen == [25.0]
 
 
-def test_progress_hook_skips_when_total_unknown(monkeypatch):
-    from transcribe.downloader import _make_progress_hook
+def test_done_line_formats_summary():
+    from transcribe.transcribe import _done_line
 
-    drawn = []
-    monkeypatch.setattr("transcribe.downloader.draw_bar", lambda *a, **kw: drawn.append(a))
-    hook = _make_progress_hook()
-    hook({"status": "downloading", "downloaded_bytes": 1000})
-    assert drawn == []
+    line = _done_line("Talk", {"duration": 751, "speakers": 2, "no_speech": False, "elapsed": 38})
+    assert line.plain == "✅ Talk  12:31 · 👥 2 · ⚡ 0:38"
+    quiet = _done_line("Clip", {"duration": 9, "speakers": None, "no_speech": True, "elapsed": 1})
+    assert quiet.plain == "🔇 Clip  no speech"
 
 
 # ---------- download retry on 403 ----------

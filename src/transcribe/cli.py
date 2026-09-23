@@ -4,6 +4,7 @@ from pathlib import Path
 
 from . import __version__
 from . import config as cfg
+from .progress import ConsoleHandler
 from .prompts import (
     MODELS,
     prompt_for_batch_files,
@@ -167,7 +168,9 @@ def _configure_logging(verbose: bool, quiet: bool) -> None:
 
     # Attach a handler to the "transcribe" namespace only, not the root logger.
     # Otherwise third-party libraries (httpx, huggingface_hub, urllib3) print at INFO too.
-    handler = logging.StreamHandler()
+    # ConsoleHandler prints through the same rich console as the progress bars, so log lines
+    # land above the live region instead of being drawn over by it.
+    handler = ConsoleHandler()
     handler.setFormatter(logging.Formatter(fmt))
 
     pkg_logger = logging.getLogger("transcribe")

@@ -1,9 +1,8 @@
 import glob
 import logging
-import time
+from collections.abc import Callable
 from pathlib import Path
 
-from .progress import draw_bar, finish_bar, fmt_eta
 from .utils import SUPPORTED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
@@ -11,22 +10,24 @@ logger = logging.getLogger(__name__)
 _DOWNLOAD_ATTEMPTS = 3
 
 
-def _make_progress_hook():
-    start = [time.time()]
-
+def _make_progress_hook(on_progress: Callable[[float], None]):
     def hook(d: dict) -> None:
         if d["status"] == "downloading":
             total = d.get("total_bytes") or d.get("total_bytes_estimate")
-            if not total:
-                return
-            pct = d["downloaded_bytes"] / total * 100
-            elapsed = time.time() - start[0]
-            remaining = elapsed / max(pct / 100, 0.001) - elapsed
-            draw_bar("Downloading", pct, fmt_eta(remaining))
-        elif d["status"] == "finished":
-            finish_bar()
+            if total:
+                on_progress(d["downloaded_bytes"] / total * 100)
 
     return hook
+
+
+class _YtdlpLog:
+    """Route yt-dlp's own output to our debug log. Left alone it prints its errors straight
+    to the terminal (through the live bars), and we report failures ourselves anyway."""
+
+    def debug(self, msg: str) -> None:
+        logger.debug("yt-dlp: %s", msg)
+
+    info = warning = error = debug
 
 
 def _cookie_opts(cookies_from_browser: str | None, cookies_file: str | None) -> dict:
@@ -56,6 +57,7 @@ def list_sources(
         "extract_flat": "in_playlist",
         "quiet": True,
         "no_warnings": True,
+        "logger": _YtdlpLog(),
         **_cookie_opts(cookies_from_browser, cookies_file),
     }
     with yt_dlp.YoutubeDL(opts) as ydl:
@@ -87,6 +89,7 @@ def download_audio(
     stem: str,
     cookies_from_browser: str | None = None,
     cookies_file: str | None = None,
+    on_progress: Callable[[float], None] = lambda pct: None,
 ) -> tuple[Path, dict]:
     """Download audio from a URL using yt-dlp.
 
@@ -107,8 +110,9 @@ def download_audio(
         "keepvideo": False,
         "quiet": True,
         "no_warnings": True,
-        "noprogress": True,  # quiet doesn't imply it in the API; our hook draws the bar
-        "progress_hooks": [_make_progress_hook()],
+        "noprogress": True,  # quiet doesn't imply it in the API; our hook feeds the live bar
+        "progress_hooks": [_make_progress_hook(on_progress)],
+        "logger": _YtdlpLog(),
         # a short pause before each download keeps channel-sized runs under YouTube's
         # bot-detection radar; negligible next to transcription time
         "sleep_interval": 2,
@@ -116,7 +120,7 @@ def download_audio(
         **_cookie_opts(cookies_from_browser, cookies_file),
     }
 
-    logger.info("\nDownloading: %s", url)
+    logger.debug("Downloading: %s", url)
     try:
         # YouTube intermittently 403s a signed media URL and yt-dlp doesn't retry 4xx.
         # A fresh YoutubeDL re-extracts and gets a new URL (and resumes the .part file).
@@ -128,9 +132,8 @@ def download_audio(
             except yt_dlp.utils.DownloadError as exc:
                 if "403" not in str(exc) or attempt == _DOWNLOAD_ATTEMPTS:
                     raise
-                finish_bar()
-                logger.info(
-                    "HTTP 403 from host, retrying (%d/%d)...", attempt + 1, _DOWNLOAD_ATTEMPTS
+                logger.warning(
+                    "HTTP 403 from host, retrying (%d/%d)…", attempt + 1, _DOWNLOAD_ATTEMPTS
                 )
     except Exception as exc:  # yt_dlp may raise DownloadError etc.
         if "ffmpeg" in str(exc).lower() or "ffprobe" in str(exc).lower():
@@ -144,8 +147,6 @@ def download_audio(
                 "run `uv tool upgrade transcribe`."
             ) from exc
         raise
-    finally:
-        finish_bar()
 
     audio_path = project_dir / f"{stem}.wav"
     if not audio_path.exists():

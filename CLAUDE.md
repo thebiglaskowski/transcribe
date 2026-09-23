@@ -38,11 +38,11 @@ The `cli.main` flow is: load config → parse args → configure logging → res
 - `output.py` — `write_txt` (optional speakers + source header), `write_srt`, `write_json`, `source_header`.
 - `downloader.py` — yt-dlp wrapper, with `import yt_dlp` lazy inside the function (so non-URL invocations don't pay its import cost). `list_sources` (flat extraction, no download; returns one group per YouTube tab) and `download_audio` (returns `(path, info)`; the info feeds `output.source_header`). `noprogress` is set because `quiet` doesn't imply it in the API — our hook draws the bar.
 - `utils.py` — `is_url`, `srt_timestamp`, `sanitize_project_name`, `SUPPORTED_EXTENSIONS`, CUDA helpers.
-- `progress.py` — TTY-gated ANSI bars + ETA + spinners + two-bar batch mode (originally no-classes design; 2026 review refactored to small TwoBarRenderer class to fix globals/PLW0603/fragility). Gated on `sys.stdout.isatty() and logger.isEnabledFor(INFO)`.
+- `progress.py` — all terminal output, built on `rich`: one module-level `console`; `ConsoleHandler` (logging → console, so log lines print *above* the live bars instead of through them — the old hand-rolled `\r`/cursor-up bars plus logging-on-stderr is what jumbled the screen); `status()` spinner for one-off waits (never around `input()`); `tracker()` live region (current item's stage emoji + bar, optional overall bar; transient, so only finished-item lines remain). Live display is gated on `console.is_terminal and INFO`. Titles in the live region go through `live_title` (symbol emoji dropped — terminals disagree on their width and a wrapped redraw smears). `rich` is a direct dependency.
 
 ## Logging
 
-Every non-prompt module owns a module-named logger (`logging.getLogger(__name__)`). `cli._configure_logging` configures the root logger once based on `-v` / `-q`. Default INFO format is bare `%(message)s`; DEBUG includes timestamp, level, and module. The carriage-return progress line in `transcribe_file` stays as direct `print()` but is gated on `logger.isEnabledFor(logging.INFO)` so `-q` silences it.
+Every non-prompt module owns a module-named logger (`logging.getLogger(__name__)`). `cli._configure_logging` attaches `progress.ConsoleHandler` to the `transcribe` logger based on `-v` / `-q`. Default INFO format is bare `%(message)s`; DEBUG includes timestamp, level, and module. Warnings/errors get 🟡/❌ prefixes; a `rich.text.Text` passed as the log message prints as-is (that's how the styled ✅/🎉 lines go out, and why `-q` hides them). Never `print()` during a run — it bypasses the console and can land inside the live region. yt-dlp's own output is routed to DEBUG via `downloader._YtdlpLog`.
 
 ## Things to know before changing things
 
