@@ -14,10 +14,11 @@ from rich.console import Console
 from rich.progress import (
     BarColumn,
     Progress,
+    ProgressColumn,
     SpinnerColumn,
+    Task,
     TaskProgressColumn,
     TextColumn,
-    TimeRemainingColumn,
 )
 from rich.table import Column
 from rich.text import Text
@@ -88,6 +89,23 @@ def status(message: str):
         yield
 
 
+class _TimeColumn(ProgressColumn):
+    """ETA while a step reports a percentage; a ticking elapsed clock while it can't, so a
+    long step (speaker labels on a 90-minute live) visibly isn't stuck."""
+
+    def __init__(self) -> None:
+        # fixed width, never wraps: with the title column taking all slack, rich otherwise
+        # shrinks this cell to its narrowest word and wraps the row onto a second line
+        super().__init__(table_column=Column(width=8, no_wrap=True, justify="right"))
+
+    def render(self, task: Task) -> Text:
+        if task.total is None:
+            return Text(f"⌛ {fmt_duration(task.elapsed)}", style="progress.elapsed", no_wrap=True)
+        left = task.time_remaining
+        remaining = fmt_duration(left) if left is not None else "…"
+        return Text(remaining, style="progress.remaining", no_wrap=True)
+
+
 class Tracker:
     """The live region of a run: the current item's stage and bar, plus an optional overall bar."""
 
@@ -104,20 +122,26 @@ class Tracker:
     def _overall_label(self) -> str:
         return f"📺 {self._overall_name}  [{self._done}/{self._overall_total}]"
 
+    def _restart(self, description: str, measurable: bool) -> None:
+        """Restart the item bar (and its clock) for a new step."""
+        self._progress.reset(self._item, total=100, description=description)
+        if not measurable:
+            # rich's reset(total=None) means "keep the current total", which left an
+            # unmeasurable step frozen at "0%"; clearing the field makes the bar pulse instead.
+            next(t for t in self._progress.tasks if t.id == self._item).total = None
+
     def start(self, title: str) -> None:
         """Begin a new item (resets the item bar)."""
         self._title = live_title(title)
         self._stage = None
-        self._progress.reset(self._item, total=None, description=f"⏳ {self._title}")
+        self._restart(f"⏳ {self._title}", measurable=False)
 
     def stage(self, emoji: str, pct: float | None = None) -> None:
-        """Show the item's current step; pct=None shows an indeterminate (pulsing) bar."""
+        """Show the item's current step; pct=None shows a pulsing bar and elapsed time."""
         key = (emoji, pct is None)
-        if key != self._stage:  # new step, or working → measurable: restart bar and its ETA
+        if key != self._stage:  # new step, or working → measurable: restart bar and its clock
             self._stage = key
-            self._progress.reset(
-                self._item, total=None if pct is None else 100, description=f"{emoji} {self._title}"
-            )
+            self._restart(f"{emoji} {self._title}", measurable=pct is not None)
         if pct is not None:
             self._progress.update(self._item, completed=pct)
 
@@ -138,7 +162,7 @@ def tracker(overall: str | None = None, total: int = 0):
         TextColumn("{task.description}", markup=False, table_column=Column(ratio=1, no_wrap=True)),
         BarColumn(bar_width=24),
         TaskProgressColumn(),
-        TimeRemainingColumn(compact=True),
+        _TimeColumn(),
         console=console,
         transient=True,
         expand=True,  # the description column absorbs the slack and truncates — never wraps

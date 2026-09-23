@@ -542,3 +542,30 @@ def test_source_header_and_txt_header(tmp_path):
     out = tmp_path / "t.txt"
     write_txt([_Segment("Hi.", 0, 1)], out, ["Speaker 1"], header)
     assert out.read_text() == f"{header}\n---\n\nSpeaker 1: Hi.\n"
+
+
+def test_short_error_trims_ytdlp_preamble_and_adds_hint():
+    from transcribe.transcribe import short_error
+
+    age = RuntimeError(
+        "\x1b[0;31mERROR:\x1b[0m [youtube] TnjbV97pV_c: Sign in to confirm your age."
+        " Use --cookies-from-browser or --cookies for the authentication. See https://github.com/yt-dlp/...\nmore"
+    )
+    assert short_error(age) == (
+        "Sign in to confirm your age · 🔞 age-restricted: needs cookies from a browser signed in"
+        " to YouTube"
+    )
+    assert short_error(ValueError("boom")) == "boom"
+    assert short_error(ValueError()) == "ValueError"
+
+
+def test_tracker_unmeasurable_step_clears_total(monkeypatch):
+    from transcribe.progress import tracker
+
+    _recording_console(monkeypatch)
+    with tracker("Chan", 1) as t:
+        t.start("A")
+        t.stage("📝", 50)
+        t.stage("👥")  # speaker labels report no percentage
+        item = next(task for task in t._progress.tasks if task.id == t._item)
+        assert item.total is None and item.description == "👥 A"

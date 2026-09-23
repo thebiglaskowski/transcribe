@@ -2,6 +2,7 @@ import argparse
 import bisect
 import logging
 import os
+import re
 import time
 import warnings
 from pathlib import Path
@@ -236,11 +237,27 @@ def transcribe_file(
     }
 
 
-def _failure_hint(exc: Exception) -> str:
-    msg = str(exc).lower()
-    if any(k in msg for k in ("cuda", "cublas", "cudnn")):
-        return " (try --device cpu, or install the [cuda] extra + NVIDIA drivers)"
-    return ""
+# Known failure → what to do about it. Matched against the lowercased error text.
+_ERROR_HINTS = [
+    ("confirm your age", "🔞 age-restricted: needs cookies from a browser signed in to YouTube"),
+    ("not a bot", "🤖 YouTube bot check: sign in via cookies, or pause and re-run later"),
+    ("403", "if this keeps happening: uv tool upgrade transcribe"),
+    ("cudnn", "check the [cuda] extra, or try --device cpu"),
+    ("cublas", "check the [cuda] extra, or try --device cpu"),
+    ("cuda", "check the [cuda] extra, or try --device cpu"),
+]
+
+
+def short_error(exc: Exception) -> str:
+    """One line for the terminal: the error's first sentence (minus yt-dlp's
+    "ERROR: [youtube] <id>: " preamble) plus a hint when we know the fix. -v logs it in full."""
+    # yt-dlp colors "ERROR:" when it sees a terminal; drop escape codes before matching
+    text = re.sub(r"\x1b\[[0-9;]*m", "", str(exc)).strip() or type(exc).__name__
+    first = re.sub(r"^ERROR:\s*(\[[^\]]+\]\s*[\w-]+:\s*)?", "", text.splitlines()[0])
+    first = first.split(". ")[0].rstrip(".")
+    lowered = text.lower()
+    hint = next((h for key, h in _ERROR_HINTS if key in lowered), None)
+    return f"{first} · {hint}" if hint else first
 
 
 def _plan_sources(urls: list[str], cookies: dict) -> tuple[list[tuple[str | None, list]], int]:
@@ -260,7 +277,8 @@ def _plan_sources(urls: list[str], cookies: dict) -> tuple[list[tuple[str | None
         except Exception as exc:
             groups = exc
         if isinstance(groups, Exception):
-            logger.error("Could not read %s: %s", url, groups)
+            logger.debug("Lookup error in full: %s", groups)
+            logger.error("Could not read %s: %s", url, short_error(groups))
             failed += 1
             continue
         if groups[0][0] is None:
@@ -306,7 +324,8 @@ def _process_project(
                     on_progress=lambda pct: t.stage("📥", pct),
                 )
             except Exception as exc:
-                logger.error("%s — download failed: %s", display(title), exc)
+                logger.debug("Download error in full: %s", exc)
+                logger.error("%s — download failed: %s", display(title), short_error(exc))
                 failures += 1
                 t.advance()
                 continue
@@ -328,9 +347,8 @@ def _process_project(
                     audio_path.unlink()
                     logger.debug("Deleted: %s", audio_path)
             except Exception as exc:
-                logger.error(
-                    "%s — transcription failed: %s%s", display(title), exc, _failure_hint(exc)
-                )
+                logger.debug("Transcription error in full: %s", exc, exc_info=True)
+                logger.error("%s — transcription failed: %s", display(title), short_error(exc))
                 failures += 1
             t.advance()
     return successes, failures
@@ -460,9 +478,8 @@ def run_multi_file_workflow(raw_paths: list[str], args: argparse.Namespace) -> i
                     audio_path.unlink()
                     logger.debug("Deleted: %s", audio_path)
             except Exception as exc:
-                logger.error(
-                    "%s — transcription failed: %s%s", audio_path.name, exc, _failure_hint(exc)
-                )
+                logger.debug("Transcription error in full: %s", exc, exc_info=True)
+                logger.error("%s — transcription failed: %s", audio_path.name, short_error(exc))
                 failures += 1
             t.advance()
 
@@ -512,7 +529,8 @@ def run_single_file_workflow(raw_path: str | None, args: argparse.Namespace) -> 
                 report=t.stage,
             )
     except Exception as exc:
-        logger.error("Transcription failed: %s%s", exc, _failure_hint(exc))
+        logger.debug("Transcription error in full: %s", exc, exc_info=True)
+        logger.error("Transcription failed: %s", short_error(exc))
         return 1
     logger.info(_done_line(audio_path.name, summary))
     logger.info(Text.assemble("📄 ", (str(txt_path), "dim")))
