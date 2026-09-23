@@ -129,13 +129,27 @@ def prompt_yes_no(question: str, default: bool) -> bool:
     return default if not answer else answer == "y"
 
 
-def prompt_video_count(total: int) -> int:
-    """Ask how many of `total` listed videos to process, newest first. 0 cancels."""
+def prompt_video_count(label: str, total: int) -> int:
+    """Ask how many of a source's `total` videos to process, newest first. 0 skips it."""
     while True:
-        raw = input(f"\nHow many to transcribe, newest first? [all {total}, 0 cancels] ")
-        raw = raw.strip().lower()
+        raw = input(f"\n{label}: how many, newest first? [all {total}, 0 skips] ").strip().lower()
         if raw in ("", "all"):
             return total
         if raw.isdigit():
             return min(int(raw), total)
         print("  Enter a number, or press Enter for all.")
+
+
+def prompt_pick_sources(url: str, groups: list) -> list:
+    """For a channel with several tabs (Videos, Live, Shorts), ask which to transcribe."""
+    print(f"\n{url} has:")
+    for i, (title, videos) in enumerate(groups, start=1):
+        print(f"  [{i}] {title} ({len(videos)} videos)")
+    while True:
+        raw = input("Which? e.g. 1 or 1,2 (Enter for all): ").replace(" ", "")
+        if not raw:
+            return groups
+        parts = raw.split(",")
+        if all(p.isdigit() and 1 <= int(p) <= len(groups) for p in parts if p):
+            return [groups[i - 1] for i in sorted({int(p) for p in parts if p})]
+        print(f"  Enter numbers from 1 to {len(groups)}, separated by commas.")

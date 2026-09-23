@@ -38,17 +38,17 @@ def _cookie_opts(cookies_from_browser: str | None, cookies_file: str | None) -> 
     return opts
 
 
-def list_videos(
+def list_sources(
     url: str,
     cookies_from_browser: str | None = None,
     cookies_file: str | None = None,
-) -> tuple[str | None, list[dict]]:
+) -> list[tuple[str | None, list[dict]]]:
     """Expand a URL into the videos it points at, without downloading anything.
 
-    A single video returns itself. A channel, playlist or TikTok profile returns its entries
-    in the site's order (newest first for channels); a YouTube channel root nests its
-    Videos/Shorts tabs, which are flattened in turn.
-    Returns (playlist title, or None for a single video; [{"id", "title", "url"}, ...]).
+    Returns [(title, videos), ...] with videos as [{"id", "title", "url"}, ...]:
+    - a single video → [(None, [itself])]
+    - a playlist or TikTok profile → [(its title, entries)], newest first for profiles
+    - a YouTube channel root → one group per non-empty tab (Videos, Live, Shorts…)
     """
     import yt_dlp
 
@@ -65,21 +65,20 @@ def list_videos(
         # flat entries carry the watch page in "url"; a full single-video info in "webpage_url"
         return {"id": e["id"], "title": e.get("title"), "url": e.get("webpage_url") or e["url"]}
 
-    if "entries" not in info:
-        return None, [video(info)]
-    videos: list[dict] = []
-
-    def walk(entries) -> None:
+    def flatten(entries) -> list[dict]:
+        out: list[dict] = []
         for e in entries:
-            if not e:
-                continue
-            if "entries" in e:
-                walk(e["entries"])
-            else:
-                videos.append(video(e))
+            if e:
+                out.extend(flatten(e["entries"]) if "entries" in e else [video(e)])
+        return out
 
-    walk(info["entries"])
-    return info.get("title"), videos
+    if "entries" not in info:
+        return [(None, [video(info)])]
+    entries = [e for e in info["entries"] if e]
+    if entries and all("entries" in e for e in entries):  # channel root: tabs
+        groups = [(e.get("title"), flatten(e["entries"])) for e in entries]
+        return [(title, videos) for title, videos in groups if videos]
+    return [(info.get("title"), flatten(entries))]
 
 
 def download_audio(

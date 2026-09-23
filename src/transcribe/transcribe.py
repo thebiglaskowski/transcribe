@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from faster_whisper import BatchedInferencePipeline, WhisperModel, decode_audio
 
-from .downloader import download_audio, list_videos
+from .downloader import download_audio, list_sources
 from .output import source_header, write_json, write_srt, write_txt
 from .progress import (
     draw_bar,
@@ -20,7 +20,12 @@ from .progress import (
     spinner_start,
     spinner_stop,
 )
-from .prompts import prompt_for_audio_file, prompt_project_name, prompt_video_count
+from .prompts import (
+    prompt_for_audio_file,
+    prompt_pick_sources,
+    prompt_project_name,
+    prompt_video_count,
+)
 from .utils import (
     SUPPORTED_EXTENSIONS,
     default_compute_type,
@@ -229,107 +234,66 @@ def transcribe_file(
     return True
 
 
-def _expand_urls(urls: list[str], cookies: dict) -> tuple[list[dict], str | None, int]:
-    """List every video behind the URLs (channels/playlists expand), deduped by id.
+def _plan_sources(urls: list[str], cookies: dict) -> tuple[list[tuple[str | None, list]], int]:
+    """List every URL and ask all the questions up front, so long runs go unattended.
 
-    Returns (videos, playlist title when exactly one URL was a playlist, URLs that failed).
+    Channel tabs (Videos/Live/Shorts), playlists and TikTok profiles each become their own
+    source with a "how many" prompt; plain video URLs share one untitled source, listed first.
+    Returns ([(source title or None, videos)], number of URLs that couldn't be read).
     """
-    videos: list[dict] = []
-    titles: list[str] = []
+    singles: list[dict] = []
+    sources: list[tuple[str | None, list]] = []
     failed = 0
-    _spinner = spinner_start("Looking up videos…")
-    try:
-        for url in urls:
-            try:
-                title, found = list_videos(url, **cookies)
-            except Exception as exc:
-                spinner_stop(_spinner)
-                logger.error("Could not read %s: %s", url, exc)
-                _spinner = spinner_start("Looking up videos…")
-                failed += 1
-                continue
-            if title:
-                titles.append(title)
-            videos.extend(found)
-    finally:
-        spinner_stop(_spinner)
-    seen: set[str] = set()
-    unique = [v for v in videos if not (v["id"] in seen or seen.add(v["id"]))]
-    return unique, (titles[0] if len(urls) == 1 and titles else None), failed
+    for url in urls:
+        _spinner = spinner_start(f"Looking up {url}…")
+        try:
+            groups = list_sources(url, **cookies)
+        except Exception as exc:
+            groups = exc
+        finally:
+            spinner_stop(_spinner)
+        if isinstance(groups, Exception):
+            logger.error("Could not read %s: %s", url, groups)
+            failed += 1
+            continue
+        if groups[0][0] is None:
+            singles.extend(groups[0][1])
+            continue
+        if len(groups) > 1:
+            groups = prompt_pick_sources(url, groups)
+        for title, videos in groups:
+            count = prompt_video_count(title or url, len(videos))
+            if count:
+                sources.append((title, videos[:count]))
+    return ([(None, singles)] if singles else []) + sources, failed
 
 
-def run_project_workflow(urls: list[str], args: argparse.Namespace, project_root: Path) -> int:
-    if not ffmpeg_available():
-        logger.error(
-            "ffmpeg not found in PATH. URL/project mode requires it for audio extraction.\n"
-            "Install with: sudo apt install ffmpeg"
-        )
-        return 1
+def _outputs(project_dir: Path, stem: str, args: argparse.Namespace):
+    txt = project_dir / f"{stem}.txt"
+    srt = (project_dir / f"{stem}.srt") if args.srt else None
+    js = (project_dir / f"{stem}.json") if getattr(args, "json", False) else None
+    return txt, srt, js
 
-    cookies = dict(
-        cookies_from_browser=getattr(args, "cookies_from_browser", None),
-        cookies_file=getattr(args, "cookies", None),
-    )
-    videos, playlist_title, failures = _expand_urls(urls, cookies)
-    if not videos:
-        logger.error("No videos found.")
-        return 1
-    if len(videos) > len(urls):  # a channel/playlist/profile expanded
-        logger.info(
-            "\nFound %d videos%s.", len(videos), f" in {playlist_title}" if playlist_title else ""
-        )
-        count = prompt_video_count(len(videos))
-        if count == 0:
-            print("Cancelled.")
-            return 0
-        videos = videos[:count]
 
-    default_name = sanitize_project_name(playlist_title) if playlist_title else None
-    _, project_dir = prompt_project_name(project_root, default=default_name)
+def _is_done(project_dir: Path, stem: str, args: argparse.Namespace) -> bool:
+    txt, _, js = _outputs(project_dir, stem, args)
+    return all(p is None or (p.exists() and p.stat().st_size > 0) for p in (txt, js))
 
-    def outputs(stem: str) -> tuple[Path, Path | None, Path | None]:
-        txt = project_dir / f"{stem}.txt"
-        srt = (project_dir / f"{stem}.srt") if args.srt else None
-        js = (project_dir / f"{stem}.json") if getattr(args, "json", False) else None
-        return txt, srt, js
 
-    def done(stem: str) -> bool:
-        txt, _, js = outputs(stem)
-        return all(p is None or (p.exists() and p.stat().st_size > 0) for p in (txt, js))
-
-    # Resume: a video counts as done when its transcript (and json, if requested) exists.
-    # Names carry the video id, so this holds even as a channel's newest-first order shifts.
-    # ponytail: keyed on the full "<title> [id]" name — a video renamed upstream gets redone.
-    for v in videos:
-        v["stem"] = video_stem(v["title"], v["id"])
-    pending = [v for v in videos if not done(v["stem"])]
-    already = len(videos) - len(pending)
-
-    logger.info("\nProject folder: %s", project_dir)
-    logger.info(
-        "Videos to process: %d%s",
-        len(pending),
-        f" ({already} already transcribed, skipped)" if already else "",
-    )
-    if not pending:
-        return 0 if failures == 0 else 1
-
-    device = default_device() if args.device == "auto" else args.device
-    compute_type = args.compute_type or default_compute_type(device)
-    model, diarizer = _load_models(args, device, compute_type)
-
-    successes = already
+def _process_project(
+    project_dir: Path, pending: list[dict], args: argparse.Namespace, model, diarizer, cookies
+) -> tuple[int, int]:
+    """Download + transcribe each pending video into project_dir. Returns (succeeded, failed)."""
+    successes = failures = 0
     bar = "=" * 60
-
     for i, v in enumerate(pending, start=1):
-        stem = v["stem"]
         logger.info("\n%s", bar)
         logger.info("[%d/%d] %s", i, len(pending), v["title"] or v["url"])
         logger.info("%s", bar)
-        txt_path, srt_path, json_path = outputs(stem)
+        txt_path, srt_path, json_path = _outputs(project_dir, v["stem"], args)
 
         try:
-            audio_path, info = download_audio(v["url"], project_dir, stem, **cookies)
+            audio_path, info = download_audio(v["url"], project_dir, v["stem"], **cookies)
         except Exception as exc:
             logger.error("Download failed: %s", exc)
             if "ffmpeg" in str(exc).lower():
@@ -364,10 +328,68 @@ def run_project_workflow(urls: list[str], args: argparse.Namespace, project_root
                 hint = " (try --device cpu)"
             logger.error("Transcription failed: %s%s", exc, hint)
             failures += 1
+    return successes, failures
 
-    logger.info("\n%s", bar)
+
+def run_project_workflow(urls: list[str], args: argparse.Namespace, project_root: Path) -> int:
+    if not ffmpeg_available():
+        logger.error(
+            "ffmpeg not found in PATH. URL/project mode requires it for audio extraction.\n"
+            "Install with: sudo apt install ffmpeg"
+        )
+        return 1
+
+    cookies = dict(
+        cookies_from_browser=getattr(args, "cookies_from_browser", None),
+        cookies_file=getattr(args, "cookies", None),
+    )
+    sources, failures = _plan_sources(urls, cookies)
+    if not sources:
+        logger.error("Nothing to transcribe.")
+        return 1 if failures else 0
+
+    # One project folder per source. Resume: a video counts as done when its transcript (and
+    # json, if requested) exists; names carry the video id, so this holds as a channel's
+    # newest-first order shifts.
+    # ponytail: keyed on the full "<title> [id]" name — a video renamed upstream gets redone.
+    projects: list[tuple[Path, list[dict]]] = []
+    successes = 0
+    for title, videos in sources:
+        default = sanitize_project_name(title.replace(" - ", "-")) if title else None
+        _, project_dir = prompt_project_name(project_root, default=default)
+        seen: set[str] = set()
+        videos = [v for v in videos if not (v["id"] in seen or seen.add(v["id"]))]
+        for v in videos:
+            v["stem"] = video_stem(v["title"], v["id"])
+        pending = [v for v in videos if not _is_done(project_dir, v["stem"], args)]
+        successes += len(videos) - len(pending)
+        projects.append((project_dir, pending))
+        already = len(videos) - len(pending)
+        skipped = f" ({already} already transcribed, skipped)" if already else ""
+        logger.info("  %s: %d to process%s", project_dir, len(pending), skipped)
+
+    if not any(pending for _, pending in projects):
+        return 0 if failures == 0 else 1
+
+    device = default_device() if args.device == "auto" else args.device
+    compute_type = args.compute_type or default_compute_type(device)
+    model, diarizer = _load_models(args, device, compute_type)
+
+    for n, (project_dir, pending) in enumerate(projects, start=1):
+        if not pending:
+            continue
+        if len(projects) > 1:
+            logger.info(
+                "\n### Project %d/%d: %s (%d videos)", n, len(projects), project_dir, len(pending)
+            )
+        ok, failed = _process_project(project_dir, pending, args, model, diarizer, cookies)
+        successes += ok
+        failures += failed
+
+    logger.info("\n%s", "=" * 60)
     logger.info("Done. %d succeeded, %d failed.", successes, failures)
-    logger.info("Transcripts saved in: %s", project_dir)
+    for project_dir, _ in projects:
+        logger.info("Transcripts saved in: %s", project_dir)
     return 0 if failures == 0 else 1
 
 

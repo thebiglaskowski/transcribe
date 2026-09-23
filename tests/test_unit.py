@@ -615,17 +615,22 @@ def test_video_stem_caps_bytes_without_splitting_emoji():
     assert video_stem("🚀" * 100, "x") == "🚀" * 30 + " [x]"
 
 
-def test_list_videos_flattens_channel_tabs(monkeypatch):
+def test_list_sources_groups_tabs_profiles_and_single_videos(monkeypatch):
     import yt_dlp
 
-    from transcribe.downloader import list_videos
+    from transcribe.downloader import list_sources
 
-    channel = {
-        "title": "Chan",
-        "entries": [
-            {"title": "Chan - Videos", "entries": [{"id": "v1", "title": "One", "url": "u1"}]},
-            {"title": "Chan - Shorts", "entries": [{"id": "s1", "title": "Short", "url": "u2"}]},
-        ],
+    infos = {
+        "channel": {
+            "title": "Chan",
+            "entries": [
+                {"title": "Chan - Videos", "entries": [{"id": "v1", "title": "One", "url": "u1"}]},
+                {"title": "Chan - Live", "entries": []},  # empty tab is dropped
+                {"title": "Chan - Shorts", "entries": [{"id": "s1", "title": "S", "url": "u2"}]},
+            ],
+        },
+        "profile": {"title": "tt", "entries": [{"id": "t1", "title": "T", "url": "u3"}, None]},
+        "single": {"id": "x", "title": "X", "webpage_url": "https://w/x", "url": "media"},
     }
 
     class FakeYDL:
@@ -640,15 +645,27 @@ def test_list_videos_flattens_channel_tabs(monkeypatch):
 
         def extract_info(self, url, download):
             assert download is False
-            if url == "single":
-                return {"id": "x", "title": "X", "webpage_url": "https://w/x", "url": "media"}
-            return channel
+            return infos[url]
 
     monkeypatch.setattr(yt_dlp, "YoutubeDL", FakeYDL)
-    title, videos = list_videos("channel")
-    assert title == "Chan"
-    assert [v["id"] for v in videos] == ["v1", "s1"]
-    assert list_videos("single") == (None, [{"id": "x", "title": "X", "url": "https://w/x"}])
+    tabs = list_sources("channel")
+    assert [(t, [v["id"] for v in vids]) for t, vids in tabs] == [
+        ("Chan - Videos", ["v1"]),
+        ("Chan - Shorts", ["s1"]),
+    ]
+    assert list_sources("profile") == [("tt", [{"id": "t1", "title": "T", "url": "u3"}])]
+    assert list_sources("single") == [(None, [{"id": "x", "title": "X", "url": "https://w/x"}])]
+
+
+def test_prompt_pick_sources_parses_choices(monkeypatch, capsys):
+    from transcribe.prompts import prompt_pick_sources
+
+    groups = [("Videos", [1, 2]), ("Live", [3]), ("Shorts", [4])]
+    answers = iter(["4", "x", "3, 1"])  # out of range, junk, then a valid pick
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    assert prompt_pick_sources("url", groups) == [groups[0], groups[2]]
+    monkeypatch.setattr("builtins.input", lambda _: "")
+    assert prompt_pick_sources("url", groups) == groups
 
 
 def test_source_header_and_txt_header(tmp_path):

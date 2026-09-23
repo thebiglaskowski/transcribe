@@ -145,10 +145,12 @@ Pass one or more video URLs and the script enters project mode: it prompts you f
 project name, creates a folder for it, downloads and extracts audio via `yt-dlp`, then
 transcribes each video in sequence.
 
-**Whole channels work too.** A YouTube channel (`youtube.com/@name` for videos + shorts, or
-`…/@name/videos` for just videos), a playlist, or a TikTok profile (`tiktok.com/@name`) expands
-into its videos, newest first. You're shown the count and asked how many to take; the project
-name defaults to the channel's. Re-running the same channel later only transcribes new uploads.
+**Whole channels work too.** Paste a YouTube channel (`youtube.com/@name`), a playlist, or a
+TikTok profile (`tiktok.com/@name`). For a YouTube channel you pick which tabs you want —
+Videos, Live, Shorts. Every source (each tab, playlist or profile) gets its own project folder
+and its own "how many, newest first?" question. All questions come first, then the run goes
+unattended. Re-running the same channel later only transcribes new uploads. Plain video URLs
+pasted alongside go into one shared folder, as before.
 
 ```bash
 transcribe https://youtu.be/abc123 https://youtu.be/def456
@@ -157,9 +159,17 @@ transcribe https://youtu.be/abc123 https://youtu.be/def456
 You will be prompted:
 
 ```
-Found 535 videos in Veritasium.
-How many to transcribe, newest first? [all 535, 0 cancels] 20
-Project name [Veritasium] (a folder will be created):
+https://www.youtube.com/@gg33academy has:
+  [1] GG33 - Videos (288 videos)
+  [2] GG33 - Live (212 videos)
+  [3] GG33 - Shorts (2410 videos)
+Which? e.g. 1 or 1,2 (Enter for all): 1,2
+
+GG33 - Videos: how many, newest first? [all 288, 0 skips]
+GG33 - Live: how many, newest first? [all 212, 0 skips] 20
+gg33academy: how many, newest first? [all 1893, 0 skips] 0
+Project name [GG33-Videos] (a folder will be created):
+Project name [GG33-Live] (a folder will be created):
 ```
 
 Project folders are created under `./projects/` (relative to your working directory) by default.
