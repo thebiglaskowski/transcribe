@@ -490,3 +490,49 @@ def test_progress_hook_skips_when_total_unknown(monkeypatch):
     hook = _make_progress_hook()
     hook({"status": "downloading", "downloaded_bytes": 1000})
     assert drawn == []
+
+
+# ---------- download retry on 403 ----------
+
+
+def _fake_ydl(monkeypatch, tmp_path, failures):
+    """Patch yt_dlp.YoutubeDL: raise a 403 DownloadError `failures` times, then write stem.wav."""
+    import yt_dlp
+
+    calls = []
+
+    class FakeYDL:
+        def __init__(self, opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def download(self, urls):
+            calls.append(urls)
+            if len(calls) <= failures:
+                raise yt_dlp.utils.DownloadError("ERROR: HTTP Error 403: Forbidden")
+            (tmp_path / "clip.wav").write_bytes(b"x")
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", FakeYDL)
+    return calls
+
+
+def test_download_audio_retries_after_403(monkeypatch, tmp_path):
+    from transcribe.downloader import download_audio
+
+    calls = _fake_ydl(monkeypatch, tmp_path, failures=1)
+    assert download_audio("https://x", tmp_path, "clip") == tmp_path / "clip.wav"
+    assert len(calls) == 2
+
+
+def test_download_audio_gives_up_with_hint(monkeypatch, tmp_path):
+    from transcribe.downloader import _DOWNLOAD_ATTEMPTS, download_audio
+
+    calls = _fake_ydl(monkeypatch, tmp_path, failures=99)
+    with pytest.raises(RuntimeError, match="uv tool upgrade transcribe"):
+        download_audio("https://x", tmp_path, "clip")
+    assert len(calls) == _DOWNLOAD_ATTEMPTS

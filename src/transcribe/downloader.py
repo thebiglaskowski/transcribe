@@ -7,6 +7,8 @@ from .utils import SUPPORTED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
+_DOWNLOAD_ATTEMPTS = 3
+
 
 def _make_progress_hook():
     start = [time.time()]
@@ -58,13 +60,30 @@ def download_audio(
 
     logger.info("\nDownloading: %s", url)
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
+        # YouTube intermittently 403s a signed media URL and yt-dlp doesn't retry 4xx.
+        # A fresh YoutubeDL re-extracts and gets a new URL (and resumes the .part file).
+        for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([url])
+                break
+            except yt_dlp.utils.DownloadError as exc:
+                if "403" not in str(exc) or attempt == _DOWNLOAD_ATTEMPTS:
+                    raise
+                finish_bar()
+                logger.info(
+                    "HTTP 403 from host, retrying (%d/%d)...", attempt + 1, _DOWNLOAD_ATTEMPTS
+                )
     except Exception as exc:  # yt_dlp may raise DownloadError etc.
         if "ffmpeg" in str(exc).lower() or "ffprobe" in str(exc).lower():
             raise RuntimeError(
                 "ffmpeg/ffprobe not found or failed. "
                 "URL mode requires `sudo apt install ffmpeg` (or your distro equivalent)."
+            ) from exc
+        if "403" in str(exc):
+            raise RuntimeError(
+                f"{exc}\nPersistent 403s usually mean yt-dlp is out of date: "
+                "run `uv tool upgrade transcribe`."
             ) from exc
         raise
     finally:
