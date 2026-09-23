@@ -12,7 +12,7 @@ A small installable Python package that wraps `faster-whisper` with a CLI. Sourc
 uv venv --python 3.11 && source .venv/bin/activate
 uv pip install -e ".[dev]"
 # For GPU: uv pip install -e ".[dev,cuda]"
-pytest                       # ~57 unit tests (pure functions + faked yt-dlp; no WhisperModel), no audio fixtures required
+pytest                       # ~64 unit tests (pure functions + faked yt-dlp; no WhisperModel), no audio fixtures required
 ruff check src/ tests/
 ruff format src/ tests/
 ```
@@ -27,7 +27,7 @@ The `cli.main` flow is: load config → parse args → configure logging → res
 - **`--model` is a deliberate `None` sentinel.** `build_parser` does NOT seed `--model` from the merged config, because `cli.main` needs to distinguish "user passed --model" from "default applied" to decide whether the interactive model menu should fire. After parsing, `cli.main` resolves the final value with explicit precedence checks (see the comment near `cli_supplied_model`).
 - **Dispatch by input shape** (`cli._classify_inputs`): URLs only → `run_project_workflow` (downloads via `yt-dlp`, creates a project subfolder under `--project-root`). All paths → `run_single_file_workflow` or `run_multi_file_workflow`. Mixed inputs are rejected.
 - **CUDA without `LD_LIBRARY_PATH`** (`utils.resolve_cuda_libs`). Called from `cli.main` before model load. Imports `nvidia.cublas.lib` and `nvidia.cudnn.lib` to find the wheel directories, prepends them to `LD_LIBRARY_PATH`, then `ctypes.CDLL`-preloads `libcublas.so.12` and `libcudnn.so.9` with `RTLD_GLOBAL` so faster-whisper's later dlopen resolves against them. No-op if the wheels are missing (the wheels now live in the optional `[cuda]` extra — see Install / dev loop). Graceful for CPU-only installs (`uv tool install .` or `uv pip install -e ".[dev]"`); GPU users add `[cuda]`. The old "hard dependency" comment is outdated post-0.2.0.
-- **Resume semantics** are still "transcript file exists and is non-empty → skip." Preserved verbatim in both batch workflows. Re-running the same command is the supported resume mechanism.
+- **Resume semantics** are still "transcript file exists and is non-empty → skip." Re-running the same command is the supported resume mechanism. In project mode, `_expand_urls` first lists every URL via `downloader.list_videos` (channels/playlists/TikTok profiles expand; YouTube channel roots nest Videos/Shorts tabs), and files are named `utils.video_stem` → `"<title> [<id>]"`, so resume is keyed on the video id rather than list position (channels are newest-first, so positional names would shift on every upload). Already-done videos are filtered before the loop; no-speech videos get a `[no speech detected]` placeholder so re-syncs don't retry them.
 
 ## Module map
 
@@ -35,8 +35,8 @@ The `cli.main` flow is: load config → parse args → configure logging → res
 - `config.py` — `Settings` dataclass, TOML loader, env parser, `merge`.
 - `transcribe.py` — `transcribe_file` + the three `run_*_workflow` functions. Transcription is batched (`BatchedInferencePipeline`, `BATCH_SIZE = 8`, `without_timestamps=False` for sentence-sized segments) whenever VAD is on; `--no-vad` falls back to sequential because batched mode needs VAD to chunk long audio. Optional speaker labels (`--diarize`, `[diarize]` extra) live here too: `load_diarizer` lazy-imports pyannote/torch like the yt-dlp import, `split_by_speaker` labels each word by majority overlap with pyannote's exclusive turns (`assign_speakers`, bisect over sorted turns) and splits segments where the speaker changes — diarizing forces `word_timestamps`. torch/torchaudio are pinned to the PyTorch cu126 index in `[tool.uv.sources]`: the default PyPI torch is CUDA 13 and its `nvidia-cudnn-cu13` wheel writes the same `nvidia/cudnn/lib` files as the cu12 wheel ctranslate2 needs, so mixing them corrupts cuDNN (`CUDNN_STATUS_SUBLIBRARY_VERSION_MISMATCH`). Workflows currently take `argparse.Namespace`; this is a known wart (would prefer a typed config object passed through).
 - `prompts.py` — every interactive `input()` lives here. These intentionally use `print`, not `logging`, because they're conversational I/O.
-- `output.py` — `write_txt`, `write_srt`.
-- `downloader.py` — yt-dlp wrapper, with `import yt_dlp` lazy inside the function (so non-URL invocations don't pay its import cost).
+- `output.py` — `write_txt` (optional speakers + source header), `write_srt`, `write_json`, `source_header`.
+- `downloader.py` — yt-dlp wrapper, with `import yt_dlp` lazy inside the function (so non-URL invocations don't pay its import cost). `list_videos` (flat extraction, no download) and `download_audio` (returns `(path, info)`; the info feeds `output.source_header`). `noprogress` is set because `quiet` doesn't imply it in the API — our hook draws the bar.
 - `utils.py` — `is_url`, `srt_timestamp`, `sanitize_project_name`, `SUPPORTED_EXTENSIONS`, CUDA helpers.
 - `progress.py` — TTY-gated ANSI bars + ETA + spinners + two-bar batch mode (originally no-classes design; 2026 review refactored to small TwoBarRenderer class to fix globals/PLW0603/fragility). Gated on `sys.stdout.isatty() and logger.isEnabledFor(INFO)`.
 

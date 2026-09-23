@@ -1,3 +1,4 @@
+import glob
 import logging
 import time
 from pathlib import Path
@@ -28,14 +29,70 @@ def _make_progress_hook():
     return hook
 
 
+def _cookie_opts(cookies_from_browser: str | None, cookies_file: str | None) -> dict:
+    opts: dict = {}
+    if cookies_from_browser:
+        opts["cookiesfrombrowser"] = (cookies_from_browser, None, None, None)
+    if cookies_file:
+        opts["cookiefile"] = cookies_file
+    return opts
+
+
+def list_videos(
+    url: str,
+    cookies_from_browser: str | None = None,
+    cookies_file: str | None = None,
+) -> tuple[str | None, list[dict]]:
+    """Expand a URL into the videos it points at, without downloading anything.
+
+    A single video returns itself. A channel, playlist or TikTok profile returns its entries
+    in the site's order (newest first for channels); a YouTube channel root nests its
+    Videos/Shorts tabs, which are flattened in turn.
+    Returns (playlist title, or None for a single video; [{"id", "title", "url"}, ...]).
+    """
+    import yt_dlp
+
+    opts = {
+        "extract_flat": "in_playlist",
+        "quiet": True,
+        "no_warnings": True,
+        **_cookie_opts(cookies_from_browser, cookies_file),
+    }
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    def video(e: dict) -> dict:
+        # flat entries carry the watch page in "url"; a full single-video info in "webpage_url"
+        return {"id": e["id"], "title": e.get("title"), "url": e.get("webpage_url") or e["url"]}
+
+    if "entries" not in info:
+        return None, [video(info)]
+    videos: list[dict] = []
+
+    def walk(entries) -> None:
+        for e in entries:
+            if not e:
+                continue
+            if "entries" in e:
+                walk(e["entries"])
+            else:
+                videos.append(video(e))
+
+    walk(info["entries"])
+    return info.get("title"), videos
+
+
 def download_audio(
     url: str,
     project_dir: Path,
     stem: str,
     cookies_from_browser: str | None = None,
     cookies_file: str | None = None,
-) -> Path:
-    """Download audio from a URL using yt-dlp. Returns the path to the extracted audio file."""
+) -> tuple[Path, dict]:
+    """Download audio from a URL using yt-dlp.
+
+    Returns (path to the extracted audio file, yt-dlp's info dict for the video).
+    """
     import yt_dlp
 
     outtmpl = str(project_dir / f"{stem}.%(ext)s")
@@ -51,12 +108,14 @@ def download_audio(
         "keepvideo": False,
         "quiet": True,
         "no_warnings": True,
+        "noprogress": True,  # quiet doesn't imply it in the API; our hook draws the bar
         "progress_hooks": [_make_progress_hook()],
+        # a short pause before each download keeps channel-sized runs under YouTube's
+        # bot-detection radar; negligible next to transcription time
+        "sleep_interval": 2,
+        "max_sleep_interval": 6,
+        **_cookie_opts(cookies_from_browser, cookies_file),
     }
-    if cookies_from_browser:
-        ydl_opts["cookiesfrombrowser"] = (cookies_from_browser, None, None, None)
-    if cookies_file:
-        ydl_opts["cookiefile"] = cookies_file
 
     logger.info("\nDownloading: %s", url)
     try:
@@ -65,7 +124,7 @@ def download_audio(
         for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([url])
+                    info = ydl.extract_info(url, download=True)
                 break
             except yt_dlp.utils.DownloadError as exc:
                 if "403" not in str(exc) or attempt == _DOWNLOAD_ATTEMPTS:
@@ -91,7 +150,7 @@ def download_audio(
 
     audio_path = project_dir / f"{stem}.wav"
     if not audio_path.exists():
-        candidates = list(project_dir.glob(f"{stem}.*"))
+        candidates = list(project_dir.glob(f"{glob.escape(stem)}.*"))  # stems contain [id]
         audio_candidates = [p for p in candidates if p.suffix.lower() in SUPPORTED_EXTENSIONS]
         if not audio_candidates:
             raise FileNotFoundError(
@@ -99,4 +158,4 @@ def download_audio(
             )
         audio_path = audio_candidates[0]
 
-    return audio_path
+    return audio_path, info

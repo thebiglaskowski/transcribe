@@ -42,6 +42,26 @@ def sanitize_project_name(raw: str) -> str | None:
     return safe or None
 
 
+# Windows-illegal (files are read from Windows via \\wsl$), yt-dlp's output-template "%",
+# and brackets (reserved for the " [id]" suffix, which is also a glob character class).
+_UNSAFE_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|%\[\]\x00-\x1f]')
+
+
+def video_stem(title: str | None, video_id: str) -> str:
+    """Filename stem "<title> [<id>]" for a downloaded video.
+
+    The id keeps names unique and resume stable when a channel's order shifts. TikTok
+    captions lose their hashtags; titles are capped at 120 UTF-8 bytes so emoji-heavy
+    names stay well under the 255-byte filesystem limit. Falls back to the bare id.
+    """
+    text = (title or "").strip().split("\n", 1)[0]
+    text = re.sub(r"#\S+", " ", text)
+    text = _UNSAFE_FILENAME_CHARS.sub(" ", text)
+    text = " ".join(text.split())
+    text = text.encode()[:120].decode(errors="ignore").strip(" .")
+    return f"{text} [{video_id}]" if text else video_id
+
+
 def resolve_cuda_libs() -> None:
     """Preload libcublas and libcudnn from the installed nvidia-cu12 wheels.
 

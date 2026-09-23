@@ -4,9 +4,26 @@ from pathlib import Path
 from .utils import srt_timestamp
 
 
-def write_txt(segments: list, output_path: Path, speakers: list | None = None) -> None:
-    """One paragraph per segment; with speakers, one "Speaker N: ..." paragraph per turn."""
-    parts: list[str] = []
+def source_header(info: dict) -> str:
+    """Title / channel / upload date / URL lines for the top of a downloaded video's transcript."""
+    date = info.get("upload_date")  # YYYYMMDD
+    fields = [
+        ("Title", " ".join((info.get("title") or "").split())),
+        ("Channel", info.get("channel") or info.get("uploader")),
+        ("Uploaded", f"{date[:4]}-{date[4:6]}-{date[6:]}" if date else None),
+        ("URL", info.get("webpage_url")),
+    ]
+    return "\n".join(f"{name}: {value}" for name, value in fields if value)
+
+
+def write_txt(
+    segments: list, output_path: Path, speakers: list | None = None, header: str | None = None
+) -> None:
+    """One paragraph per segment; with speakers, one "Speaker N: ..." paragraph per turn.
+
+    An optional header (see source_header) goes above a "---" line.
+    """
+    parts: list[str] = [f"{header}\n---"] if header else []
     current = None
     for segment, speaker in zip(segments, speakers or [None] * len(segments), strict=True):
         text = segment.text.strip()
@@ -14,7 +31,7 @@ def write_txt(segments: list, output_path: Path, speakers: list | None = None) -
             continue
         if speakers is None:
             parts.append(text)
-        elif speaker == current and parts:
+        elif speaker == current and parts and current is not None:
             parts[-1] += " " + text
         else:
             parts.append(f"{speaker}: {text}" if speaker else text)

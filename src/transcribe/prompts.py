@@ -104,11 +104,12 @@ def prompt_for_audio_file() -> Path:
         return path
 
 
-def prompt_project_name(project_root: Path) -> tuple[str, Path]:
+def prompt_project_name(project_root: Path, default: str | None = None) -> tuple[str, Path]:
     """Prompt for a project name and return (sanitized_name, created_folder_path)."""
     project_root.mkdir(parents=True, exist_ok=True)
+    hint = f" [{default}]" if default else ""
     while True:
-        raw = input("Project name (a folder will be created): ")
+        raw = input(f"Project name{hint} (a folder will be created): ").strip() or default or ""
         safe = sanitize_project_name(raw)
         if safe is None:
             print("Name produced no valid characters. Try again.\n")
@@ -126,3 +127,15 @@ def prompt_yes_no(question: str, default: bool) -> bool:
     hint = "Y/n" if default else "y/N"
     answer = input(f"\n{question} [{hint}] ").strip().lower()
     return default if not answer else answer == "y"
+
+
+def prompt_video_count(total: int) -> int:
+    """Ask how many of `total` listed videos to process, newest first. 0 cancels."""
+    while True:
+        raw = input(f"\nHow many to transcribe, newest first? [all {total}, 0 cancels] ")
+        raw = raw.strip().lower()
+        if raw in ("", "all"):
+            return total
+        if raw.isdigit():
+            return min(int(raw), total)
+        print("  Enter a number, or press Enter for all.")

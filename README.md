@@ -145,6 +145,11 @@ Pass one or more video URLs and the script enters project mode: it prompts you f
 project name, creates a folder for it, downloads and extracts audio via `yt-dlp`, then
 transcribes each video in sequence.
 
+**Whole channels work too.** A YouTube channel (`youtube.com/@name` for videos + shorts, or
+`…/@name/videos` for just videos), a playlist, or a TikTok profile (`tiktok.com/@name`) expands
+into its videos, newest first. You're shown the count and asked how many to take; the project
+name defaults to the channel's. Re-running the same channel later only transcribes new uploads.
+
 ```bash
 transcribe https://youtu.be/abc123 https://youtu.be/def456
 ```
@@ -152,20 +157,26 @@ transcribe https://youtu.be/abc123 https://youtu.be/def456
 You will be prompted:
 
 ```
-Project name (a folder will be created): my-research
+Found 535 videos in Veritasium.
+How many to transcribe, newest first? [all 535, 0 cancels] 20
+Project name [Veritasium] (a folder will be created):
 ```
 
 Project folders are created under `./projects/` (relative to your working directory) by default.
 Override with `--project-root /some/path`, the `TRANSCRIBE_PROJECT_ROOT` env var, or `project_root`
-in the config file. The example above produces:
+in the config file. Files are named after the video's title plus its id:
 
 ```
-projects/my-research/my-research1.wav   ← extracted audio
-projects/my-research/my-research1.txt   ← transcript
-projects/my-research/my-research2.wav
-projects/my-research/my-research2.txt
+projects/Veritasium/Is spider web really stronger than steel [wt4p2oalmRY].txt
+projects/Veritasium/Why does every mammal get 1 billion heartbeats in their life [tL9Lw250spc].txt
 ...
 ```
+
+Each transcript opens with the video's title, channel, upload date and URL above a `---` line.
+The id keeps names unique and makes resume reliable: a video whose transcript already exists is
+skipped, however the channel's order has shifted. Videos with no speech get a
+`[no speech detected]` placeholder so re-runs don't retry them. (Folders from before this
+naming scheme used `name1.txt`, `name2.txt`… and won't be recognised as done.)
 
 Works with any site `yt-dlp` supports.
 

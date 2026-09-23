@@ -9,8 +9,8 @@ from types import SimpleNamespace
 
 from faster_whisper import BatchedInferencePipeline, WhisperModel, decode_audio
 
-from .downloader import download_audio
-from .output import write_json, write_srt, write_txt
+from .downloader import download_audio, list_videos
+from .output import source_header, write_json, write_srt, write_txt
 from .progress import (
     draw_bar,
     draw_two_bars,
@@ -20,8 +20,15 @@ from .progress import (
     spinner_start,
     spinner_stop,
 )
-from .prompts import prompt_for_audio_file, prompt_project_name
-from .utils import SUPPORTED_EXTENSIONS, default_compute_type, default_device, ffmpeg_available
+from .prompts import prompt_for_audio_file, prompt_project_name, prompt_video_count
+from .utils import (
+    SUPPORTED_EXTENSIONS,
+    default_compute_type,
+    default_device,
+    ffmpeg_available,
+    sanitize_project_name,
+    video_stem,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +152,7 @@ def transcribe_file(
     info_prefix: str = "",
     file_progress: tuple[int, int] | None = None,
     diarizer=None,
+    header: str | None = None,
 ) -> bool:
     """Transcribe a single audio file. Returns True on success."""
     logger.info("\n%sInput:  %s", info_prefix, audio_path)
@@ -194,8 +202,11 @@ def transcribe_file(
             finish_bar()
 
     if not segments:
-        logger.warning("No transcript text was produced.")
-        return False
+        # A placeholder (not a missing file) so resume skips music-only videos instead of
+        # re-downloading them on every channel re-sync.
+        logger.warning("%sNo speech detected; writing a placeholder.", info_prefix)
+        segments = [SimpleNamespace(start=0.0, end=0.0, text="[no speech detected]", words=[])]
+        diarizer = None
 
     speakers = None
     if diarizer:
@@ -206,7 +217,7 @@ def transcribe_file(
             spinner_stop(_spinner)
         logger.info("%sSpeakers: %d", info_prefix, len({s for s in speakers if s}))
 
-    write_txt(segments, txt_path, speakers)
+    write_txt(segments, txt_path, speakers, header)
     if srt_path:
         write_srt(segments, srt_path, speakers)
     if json_path:
@@ -218,9 +229,36 @@ def transcribe_file(
     return True
 
 
-def run_project_workflow(urls: list[str], args: argparse.Namespace, project_root: Path) -> int:
-    project_name, project_dir = prompt_project_name(project_root)
+def _expand_urls(urls: list[str], cookies: dict) -> tuple[list[dict], str | None, int]:
+    """List every video behind the URLs (channels/playlists expand), deduped by id.
 
+    Returns (videos, playlist title when exactly one URL was a playlist, URLs that failed).
+    """
+    videos: list[dict] = []
+    titles: list[str] = []
+    failed = 0
+    _spinner = spinner_start("Looking up videos…")
+    try:
+        for url in urls:
+            try:
+                title, found = list_videos(url, **cookies)
+            except Exception as exc:
+                spinner_stop(_spinner)
+                logger.error("Could not read %s: %s", url, exc)
+                _spinner = spinner_start("Looking up videos…")
+                failed += 1
+                continue
+            if title:
+                titles.append(title)
+            videos.extend(found)
+    finally:
+        spinner_stop(_spinner)
+    seen: set[str] = set()
+    unique = [v for v in videos if not (v["id"] in seen or seen.add(v["id"]))]
+    return unique, (titles[0] if len(urls) == 1 and titles else None), failed
+
+
+def run_project_workflow(urls: list[str], args: argparse.Namespace, project_root: Path) -> int:
     if not ffmpeg_available():
         logger.error(
             "ffmpeg not found in PATH. URL/project mode requires it for audio extraction.\n"
@@ -228,45 +266,70 @@ def run_project_workflow(urls: list[str], args: argparse.Namespace, project_root
         )
         return 1
 
-    device = default_device() if args.device == "auto" else args.device
-    compute_type = args.compute_type or default_compute_type(device)
+    cookies = dict(
+        cookies_from_browser=getattr(args, "cookies_from_browser", None),
+        cookies_file=getattr(args, "cookies", None),
+    )
+    videos, playlist_title, failures = _expand_urls(urls, cookies)
+    if not videos:
+        logger.error("No videos found.")
+        return 1
+    if len(videos) > len(urls):  # a channel/playlist/profile expanded
+        logger.info(
+            "\nFound %d videos%s.", len(videos), f" in {playlist_title}" if playlist_title else ""
+        )
+        count = prompt_video_count(len(videos))
+        if count == 0:
+            print("Cancelled.")
+            return 0
+        videos = videos[:count]
+
+    default_name = sanitize_project_name(playlist_title) if playlist_title else None
+    _, project_dir = prompt_project_name(project_root, default=default_name)
+
+    def outputs(stem: str) -> tuple[Path, Path | None, Path | None]:
+        txt = project_dir / f"{stem}.txt"
+        srt = (project_dir / f"{stem}.srt") if args.srt else None
+        js = (project_dir / f"{stem}.json") if getattr(args, "json", False) else None
+        return txt, srt, js
+
+    def done(stem: str) -> bool:
+        txt, _, js = outputs(stem)
+        return all(p is None or (p.exists() and p.stat().st_size > 0) for p in (txt, js))
+
+    # Resume: a video counts as done when its transcript (and json, if requested) exists.
+    # Names carry the video id, so this holds even as a channel's newest-first order shifts.
+    # ponytail: keyed on the full "<title> [id]" name — a video renamed upstream gets redone.
+    for v in videos:
+        v["stem"] = video_stem(v["title"], v["id"])
+    pending = [v for v in videos if not done(v["stem"])]
+    already = len(videos) - len(pending)
 
     logger.info("\nProject folder: %s", project_dir)
-    logger.info("Videos to process: %d", len(urls))
+    logger.info(
+        "Videos to process: %d%s",
+        len(pending),
+        f" ({already} already transcribed, skipped)" if already else "",
+    )
+    if not pending:
+        return 0 if failures == 0 else 1
 
+    device = default_device() if args.device == "auto" else args.device
+    compute_type = args.compute_type or default_compute_type(device)
     model, diarizer = _load_models(args, device, compute_type)
 
-    successes = 0
-    failures = 0
+    successes = already
     bar = "=" * 60
 
-    for i, url in enumerate(urls, start=1):
-        stem = f"{project_name}{i}"
+    for i, v in enumerate(pending, start=1):
+        stem = v["stem"]
         logger.info("\n%s", bar)
-        logger.info("[%d/%d] %s", i, len(urls), url)
+        logger.info("[%d/%d] %s", i, len(pending), v["title"] or v["url"])
         logger.info("%s", bar)
-
-        txt_path = project_dir / f"{stem}.txt"
-        srt_path = (project_dir / f"{stem}.srt") if args.srt else None
-        json_path = None
-        if getattr(args, "json", False):
-            json_path = project_dir / f"{stem}.json"
-
-        if txt_path.exists() and txt_path.stat().st_size > 0:
-            # Also consider json if --json was requested (simple resume)
-            if not json_path or (json_path.exists() and json_path.stat().st_size > 0):
-                logger.info("  Skipping — transcript already exists: %s", txt_path.name)
-                successes += 1
-                continue
+        txt_path, srt_path, json_path = outputs(stem)
 
         try:
-            audio_path = download_audio(
-                url,
-                project_dir,
-                stem,
-                cookies_from_browser=getattr(args, "cookies_from_browser", None),
-                cookies_file=getattr(args, "cookies", None),
-            )
+            audio_path, info = download_audio(v["url"], project_dir, stem, **cookies)
         except Exception as exc:
             logger.error("Download failed: %s", exc)
             if "ffmpeg" in str(exc).lower():
@@ -283,8 +346,9 @@ def run_project_workflow(urls: list[str], args: argparse.Namespace, project_root
                 model,
                 args,
                 info_prefix="  ",
-                file_progress=(i, len(urls)),
+                file_progress=(i, len(pending)),
                 diarizer=diarizer,
+                header=source_header(info),
             )
             if ok:
                 successes += 1

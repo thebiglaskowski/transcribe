@@ -513,11 +513,12 @@ def _fake_ydl(monkeypatch, tmp_path, failures):
         def __exit__(self, *exc):
             return False
 
-        def download(self, urls):
-            calls.append(urls)
+        def extract_info(self, url, download):
+            calls.append(url)
             if len(calls) <= failures:
                 raise yt_dlp.utils.DownloadError("ERROR: HTTP Error 403: Forbidden")
             (tmp_path / "clip.wav").write_bytes(b"x")
+            return {"id": "abc"}
 
     monkeypatch.setattr(yt_dlp, "YoutubeDL", FakeYDL)
     return calls
@@ -527,7 +528,7 @@ def test_download_audio_retries_after_403(monkeypatch, tmp_path):
     from transcribe.downloader import download_audio
 
     calls = _fake_ydl(monkeypatch, tmp_path, failures=1)
-    assert download_audio("https://x", tmp_path, "clip") == tmp_path / "clip.wav"
+    assert download_audio("https://x", tmp_path, "clip") == (tmp_path / "clip.wav", {"id": "abc"})
     assert len(calls) == 2
 
 
@@ -580,3 +581,83 @@ def test_write_txt_merges_consecutive_speaker_turns(tmp_path):
     out = tmp_path / "t.txt"
     write_txt(segs, out, ["Speaker 1", "Speaker 1", "Speaker 2"])
     assert out.read_text() == "Speaker 1: Hi. How are you?\n\nSpeaker 2: Good.\n"
+
+
+# ---------- channels / title naming ----------
+
+
+def test_video_stem_title_and_id():
+    from transcribe.utils import video_stem
+
+    assert video_stem("Is spider web stronger than steel?", "wt4p") == (
+        "Is spider web stronger than steel [wt4p]"
+    )
+
+
+def test_video_stem_tiktok_caption_drops_hashtags_and_extra_lines():
+    from transcribe.utils import video_stem
+
+    assert video_stem("Dance in space! 🪩 #nasa #fyp\nmore", "768") == "Dance in space! 🪩 [768]"
+
+
+def test_video_stem_strips_unsafe_chars_and_falls_back_to_id():
+    from transcribe.utils import video_stem
+
+    assert video_stem('a/b\\c: 100% [LIVE] "q" <x>|y*?.', "id1") == "a b c 100 LIVE q x y [id1]"
+    assert video_stem("#fyp #viral", "123") == "123"
+    assert video_stem(None, "123") == "123"
+
+
+def test_video_stem_caps_bytes_without_splitting_emoji():
+    from transcribe.utils import video_stem
+
+    # 120 bytes = 30 four-byte emoji; a byte cut mid-emoji would leave invalid UTF-8
+    assert video_stem("🚀" * 100, "x") == "🚀" * 30 + " [x]"
+
+
+def test_list_videos_flattens_channel_tabs(monkeypatch):
+    import yt_dlp
+
+    from transcribe.downloader import list_videos
+
+    channel = {
+        "title": "Chan",
+        "entries": [
+            {"title": "Chan - Videos", "entries": [{"id": "v1", "title": "One", "url": "u1"}]},
+            {"title": "Chan - Shorts", "entries": [{"id": "s1", "title": "Short", "url": "u2"}]},
+        ],
+    }
+
+    class FakeYDL:
+        def __init__(self, opts):
+            assert opts["extract_flat"] == "in_playlist"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def extract_info(self, url, download):
+            assert download is False
+            if url == "single":
+                return {"id": "x", "title": "X", "webpage_url": "https://w/x", "url": "media"}
+            return channel
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", FakeYDL)
+    title, videos = list_videos("channel")
+    assert title == "Chan"
+    assert [v["id"] for v in videos] == ["v1", "s1"]
+    assert list_videos("single") == (None, [{"id": "x", "title": "X", "url": "https://w/x"}])
+
+
+def test_source_header_and_txt_header(tmp_path):
+    from transcribe.output import source_header
+
+    header = source_header(
+        {"title": "T\nx", "channel": "C", "upload_date": "20260831", "webpage_url": "https://u"}
+    )
+    assert header == "Title: T x\nChannel: C\nUploaded: 2026-08-31\nURL: https://u"
+    out = tmp_path / "t.txt"
+    write_txt([_Segment("Hi.", 0, 1)], out, ["Speaker 1"], header)
+    assert out.read_text() == f"{header}\n---\n\nSpeaker 1: Hi.\n"
