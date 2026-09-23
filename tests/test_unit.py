@@ -176,6 +176,7 @@ def test_build_parser_has_version_and_list_models():
         "vad": True,
         "srt": False,
         "word_timestamps": False,
+        "diarize": False,
         "language": None,
         "cleanup": False,
         "project_root": "projects",
@@ -201,6 +202,7 @@ def test_list_models_flag_in_namespace():
         "srt": False,
         "word_timestamps": False,
         "language": None,
+        "diarize": False,
         "cleanup": False,
         "project_root": "projects",
         "cookies_from_browser": None,
@@ -536,3 +538,45 @@ def test_download_audio_gives_up_with_hint(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="uv tool upgrade transcribe"):
         download_audio("https://x", tmp_path, "clip")
     assert len(calls) == _DOWNLOAD_ATTEMPTS
+
+
+# ---------- speaker labels ----------
+
+
+def test_assign_speakers_majority_overlap_and_first_appearance_naming():
+    from transcribe.transcribe import assign_speakers
+
+    turns = [(0.0, 4.0, "SPEAKER_01"), (4.0, 10.0, "SPEAKER_00")]
+    segs = [
+        _Segment("a", 0.0, 3.0),  # all SPEAKER_01
+        _Segment("b", 3.0, 7.0),  # straddles: 1s of 01, 3s of 00 -> 00
+        _Segment("c", 20.0, 21.0),  # no overlap (music, silence)
+    ]
+    # SPEAKER_01 talks first, so it becomes "Speaker 1" regardless of pyannote's numbering
+    assert assign_speakers(segs, turns) == ["Speaker 1", "Speaker 2", None]
+
+
+def test_split_by_speaker_splits_mid_segment_and_keeps_unlabeled_words():
+    from types import SimpleNamespace as W
+
+    from transcribe.transcribe import split_by_speaker
+
+    turns = [(0.0, 2.0, "SPEAKER_00"), (2.0, 4.0, "SPEAKER_01")]
+    words = [
+        W(word=" So", start=0.0, end=0.5),
+        W(word=" yeah.", start=0.5, end=1.5),
+        W(word=" Right.", start=2.5, end=3.0),
+        W(word=" Uh", start=9.0, end=9.5),  # no turn: stays with the current run
+    ]
+    seg = W(text=" So yeah. Right. Uh", start=0.0, end=9.5, words=words)
+    out, speakers = split_by_speaker([seg], turns)
+    assert [s.text for s in out] == [" So yeah.", " Right. Uh"]
+    assert speakers == ["Speaker 1", "Speaker 2"]
+    assert (out[1].start, out[1].end) == (2.5, 9.5)
+
+
+def test_write_txt_merges_consecutive_speaker_turns(tmp_path):
+    segs = [_Segment("Hi.", 0, 1), _Segment("How are you?", 1, 2), _Segment("Good.", 2, 3)]
+    out = tmp_path / "t.txt"
+    write_txt(segs, out, ["Speaker 1", "Speaker 1", "Speaker 2"])
+    assert out.read_text() == "Speaker 1: Hi. How are you?\n\nSpeaker 2: Good.\n"

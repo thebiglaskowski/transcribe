@@ -10,6 +10,7 @@ from .prompts import (
     prompt_for_urls,
     prompt_mode_menu,
     prompt_model_menu,
+    prompt_yes_no,
 )
 from .transcribe import (
     run_multi_file_workflow,
@@ -77,6 +78,12 @@ def build_parser(defaults: dict) -> argparse.ArgumentParser:
         action="store_true",
         default=defaults["word_timestamps"],
         help="Enable word-level timestamps (if supported by the model).",
+    )
+    parser.add_argument(
+        "--diarize",
+        action="store_true",
+        default=defaults["diarize"],
+        help="Label speakers (who said what). Needs the [diarize] extra and a Hugging Face login.",
     )
     parser.add_argument(
         "--json",
@@ -218,12 +225,8 @@ def main() -> int:
             elif not cli_supplied_model:
                 args.model = merged["model"]
             mode = prompt_mode_menu()
-            default_cleanup = merged["cleanup"]
-            prompt_hint = "Y/n" if default_cleanup else "y/N"
-            answer = (
-                input(f"\nDelete audio files after transcription? [{prompt_hint}] ").strip().lower()
-            )
-            args.cleanup = default_cleanup if not answer else answer == "y"
+            args.cleanup = prompt_yes_no("Delete audio files after transcription?", args.cleanup)
+            args.diarize = prompt_yes_no("Label speakers (who said what)?", args.diarize)
             if mode == "urls":
                 urls = prompt_for_urls()
                 return run_project_workflow(urls, args, project_root)
@@ -253,6 +256,9 @@ def main() -> int:
     except KeyboardInterrupt:
         print("\nCancelled.")
         return 130
+    except RuntimeError as exc:  # setup failures (e.g. speaker model can't load) — no traceback
+        logger.error("\n%s", exc)
+        return 1
 
 
 if __name__ == "__main__":

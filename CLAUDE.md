@@ -12,7 +12,7 @@ A small installable Python package that wraps `faster-whisper` with a CLI. Sourc
 uv venv --python 3.11 && source .venv/bin/activate
 uv pip install -e ".[dev]"
 # For GPU: uv pip install -e ".[dev,cuda]"
-pytest                       # ~49 unit tests (pure functions only; grew with progress bars), no audio fixtures required
+pytest                       # ~57 unit tests (pure functions + faked yt-dlp; no WhisperModel), no audio fixtures required
 ruff check src/ tests/
 ruff format src/ tests/
 ```
@@ -33,7 +33,7 @@ The `cli.main` flow is: load config → parse args → configure logging → res
 
 - `cli.py` — argparse, logging setup, dispatch. No business logic.
 - `config.py` — `Settings` dataclass, TOML loader, env parser, `merge`.
-- `transcribe.py` — `transcribe_file` + the three `run_*_workflow` functions. Workflows currently take `argparse.Namespace`; this is a known wart (would prefer a typed config object passed through).
+- `transcribe.py` — `transcribe_file` + the three `run_*_workflow` functions. Transcription is batched (`BatchedInferencePipeline`, `BATCH_SIZE = 8`, `without_timestamps=False` for sentence-sized segments) whenever VAD is on; `--no-vad` falls back to sequential because batched mode needs VAD to chunk long audio. Optional speaker labels (`--diarize`, `[diarize]` extra) live here too: `load_diarizer` lazy-imports pyannote/torch like the yt-dlp import, `split_by_speaker` labels each word by majority overlap with pyannote's exclusive turns (`assign_speakers`, bisect over sorted turns) and splits segments where the speaker changes — diarizing forces `word_timestamps`. torch/torchaudio are pinned to the PyTorch cu126 index in `[tool.uv.sources]`: the default PyPI torch is CUDA 13 and its `nvidia-cudnn-cu13` wheel writes the same `nvidia/cudnn/lib` files as the cu12 wheel ctranslate2 needs, so mixing them corrupts cuDNN (`CUDNN_STATUS_SUBLIBRARY_VERSION_MISMATCH`). Workflows currently take `argparse.Namespace`; this is a known wart (would prefer a typed config object passed through).
 - `prompts.py` — every interactive `input()` lives here. These intentionally use `print`, not `logging`, because they're conversational I/O.
 - `output.py` — `write_txt`, `write_srt`.
 - `downloader.py` — yt-dlp wrapper, with `import yt_dlp` lazy inside the function (so non-URL invocations don't pay its import cost).

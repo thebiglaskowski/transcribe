@@ -28,6 +28,11 @@ dev = [
     "pytest>=7",
     "ruff>=0.6",
 ]
+diarize = [
+    "pyannote.audio>=4",
+    "torch",
+    "torchaudio",
+]
 cuda = [
     "nvidia-cublas-cu12",
     "nvidia-cudnn-cu12==9.*",
@@ -45,3 +50,15 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+# torch's default PyPI build is CUDA 13, and its cuDNN wheel writes the same files as the
+# CUDA 12 cuDNN that ctranslate2 (faster-whisper) needs — mixing them breaks both. Pin torch(audio)
+# to the CUDA 12 build so the whole process shares one cuDNN.
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }
+torchaudio = { index = "pytorch-cu126" }
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true

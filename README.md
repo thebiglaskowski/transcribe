@@ -83,6 +83,21 @@ GPU is auto-detected: when the `[cuda]` extra is installed *and* CUDA is present
 inside the installed `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` wheels and loads them in-process.
 No `LD_LIBRARY_PATH` setup needed. If you run on CPU only, just omit the `[cuda]` extra.
 
+**Speaker labels (optional):** `--diarize` (or answering *y* to "Label speakers?") tags each
+paragraph `Speaker 1:`, `Speaker 2:`… using [pyannote](https://hf.co/pyannote/speaker-diarization-community-1).
+It pulls in torch (several GB), so it's a separate extra, and the model is gated on Hugging Face:
+
+```bash
+uv tool install --force --reinstall '.[cuda,diarize]'
+# once: accept the terms at https://hf.co/pyannote/speaker-diarization-community-1,
+# create a Read token at https://hf.co/settings/tokens, then:
+uvx --from huggingface_hub hf auth login
+```
+
+torch is pinned to its CUDA 12 build (see `[tool.uv.sources]`) so it shares faster-whisper's cuDNN —
+the default CUDA 13 torch would corrupt it. Speakers are numbered in order of first appearance — find/replace
+`Speaker 1:` with a real name afterwards. Set `diarize = true` in the config to default the prompt to yes.
+
 ---
 
 ## Configuration
@@ -185,6 +200,9 @@ transcribe --json --word-timestamps clip.mp3
 
 # Enable word-level timestamps (richer data for --json or future use)
 transcribe --word-timestamps clip.mp3
+
+# Label speakers (needs the [diarize] extra — see Install)
+transcribe --diarize --srt interview.mp3
 
 # Force GPU / CPU
 transcribe --device cuda

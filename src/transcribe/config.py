@@ -16,6 +16,7 @@ class Settings:
     vad: bool = True
     srt: bool = False
     word_timestamps: bool = False
+    diarize: bool = False
     language: str | None = None
     cleanup: bool = False
     project_root: Path = field(default_factory=lambda: Path("projects"))
@@ -35,6 +36,7 @@ DEFAULT_CONFIG_TEMPLATE = """\
 # vad = true
 # srt = false
 # word_timestamps = false
+# diarize = false               # label speakers; needs the [diarize] extra + HF login
 # language = "en"                # leave unset for auto-detect
 # cleanup = false
 # project_root = "projects"           # relative to cwd; use an absolute path to fix it globally
@@ -55,6 +57,7 @@ _ENV_MAP: dict[str, tuple[str, Callable[[str], object]]] = {
     "TRANSCRIBE_VAD": ("vad", _parse_bool),
     "TRANSCRIBE_SRT": ("srt", _parse_bool),
     "TRANSCRIBE_WORD_TIMESTAMPS": ("word_timestamps", _parse_bool),
+    "TRANSCRIBE_DIARIZE": ("diarize", _parse_bool),
     "TRANSCRIBE_LANGUAGE": ("language", str),
     "TRANSCRIBE_CLEANUP": ("cleanup", _parse_bool),
     "TRANSCRIBE_PROJECT_ROOT": ("project_root", lambda s: Path(s).expanduser()),

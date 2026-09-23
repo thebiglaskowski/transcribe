@@ -120,3 +120,9 @@ def prompt_project_name(project_root: Path) -> tuple[str, Path]:
                 continue
         project_dir.mkdir(parents=True, exist_ok=True)
         return safe, project_dir
+
+
+def prompt_yes_no(question: str, default: bool) -> bool:
+    hint = "Y/n" if default else "y/N"
+    answer = input(f"\n{question} [{hint}] ").strip().lower()
+    return default if not answer else answer == "y"

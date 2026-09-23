@@ -1,9 +1,13 @@
 import argparse
+import bisect
 import logging
+import os
 import time
+import warnings
 from pathlib import Path
+from types import SimpleNamespace
 
-from faster_whisper import WhisperModel
+from faster_whisper import BatchedInferencePipeline, WhisperModel, decode_audio
 
 from .downloader import download_audio
 from .output import write_json, write_srt, write_txt
@@ -21,6 +25,115 @@ from .utils import SUPPORTED_EXTENSIONS, default_compute_type, default_device, f
 
 logger = logging.getLogger(__name__)
 
+BATCH_SIZE = 8  # measured: ~1.9x faster than sequential on a 3060 Ti; 16 was no faster
+DIARIZATION_MODEL = "pyannote/speaker-diarization-community-1"
+
+
+def load_diarizer(device: str):
+    """Load the pyannote speaker-diarization pipeline (lazy: torch is heavy)."""
+    # cuDNN probes a ~10 GB workspace on first use, fails, and falls back; torch logs each
+    # attempt as an OOM warning. Harmless (same result at any batch size), so hide C++ warnings.
+    os.environ.setdefault("TORCH_CPP_LOG_LEVEL", "ERROR")
+    try:
+        import torch
+        from pyannote.audio import Pipeline
+    except ImportError as exc:
+        raise RuntimeError(
+            "Speaker labels need the [diarize] extra: "
+            'uv tool install --force --reinstall "/path/to/transcribe[cuda,diarize]"'
+        ) from exc
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # pyannote's TF32/reproducibility notices
+            pipeline = Pipeline.from_pretrained(DIARIZATION_MODEL)  # token from `hf auth login`
+    except Exception as exc:
+        raise RuntimeError(
+            f"Could not load {DIARIZATION_MODEL}: {exc}\n"
+            f"Accept its terms at https://hf.co/{DIARIZATION_MODEL}, then log in with "
+            "`uvx --from huggingface_hub hf auth login` (a Read token is enough)."
+        ) from exc
+    pipeline.to(torch.device(device))
+    return pipeline
+
+
+def _load_models(args: argparse.Namespace, device: str, compute_type: str):
+    _spinner = spinner_start(f"Loading model {args.model}…")
+    try:
+        model = WhisperModel(args.model, device=device, compute_type=compute_type)
+        diarizer = load_diarizer(device) if getattr(args, "diarize", False) else None
+    finally:
+        spinner_stop(_spinner)
+    logger.info("Device: %s | Compute type: %s", device, compute_type)
+    if diarizer:
+        logger.info("Speaker labels: on")
+    return model, diarizer
+
+
+def speaker_turns(diarizer, audio) -> list[tuple[float, float, str]]:
+    """Run diarization on 16 kHz mono audio; returns (start, end, speaker) turns."""
+    import torch
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # std()-degrees-of-freedom noise on short turns
+        result = diarizer({"waveform": torch.from_numpy(audio)[None], "sample_rate": 16000})
+    # exclusive_* has no overlapping turns — pyannote's variant meant for aligning to transcripts
+    return [(t.start, t.end, spk) for t, spk in result.exclusive_speaker_diarization]
+
+
+def assign_speakers(items: list, turns: list[tuple[float, float, str]]) -> list[str | None]:
+    """Label each item (segment or word) with the speaker who talks most during it.
+
+    Labels are "Speaker 1", "Speaker 2"… numbered by first appearance; None when no turn
+    overlaps (music, silence). `turns` must be sorted and non-overlapping, which pyannote's
+    exclusive diarization guarantees — so both starts and ends ascend and bisect works.
+    """
+    starts = [t[0] for t in turns]
+    names: dict[str, str] = {}
+    labels: list[str | None] = []
+    for item in items:
+        overlap: dict[str, float] = {}
+        i = bisect.bisect_left(starts, item.end) - 1  # last turn starting before item ends
+        while i >= 0 and turns[i][1] > item.start:
+            start, end, spk = turns[i]
+            overlap[spk] = overlap.get(spk, 0.0) + min(item.end, end) - max(item.start, start)
+            i -= 1
+        if not overlap:
+            labels.append(None)
+            continue
+        spk = max(overlap, key=overlap.__getitem__)
+        labels.append(names.setdefault(spk, f"Speaker {len(names) + 1}"))
+    return labels
+
+
+def split_by_speaker(segments: list, turns: list[tuple[float, float, str]]) -> tuple[list, list]:
+    """Label words by speaker and split segments where the speaker changes mid-sentence.
+
+    Needs word timestamps. Returns (segments, speakers) as aligned lists for the writers.
+    Unlabeled words (no overlapping turn) stay with the words around them.
+    """
+    labels = iter(assign_speakers([w for seg in segments for w in seg.words or []], turns))
+    out: list = []
+    speakers: list[str | None] = []
+
+    def flush(words: list, speaker: str | None) -> None:
+        text = "".join(w.word for w in words)
+        out.append(SimpleNamespace(start=words[0].start, end=words[-1].end, text=text, words=words))
+        speakers.append(speaker)
+
+    for seg in segments:
+        run: list = []
+        run_speaker = None
+        for word in seg.words or []:
+            speaker = next(labels)
+            if run and speaker and run_speaker and speaker != run_speaker:
+                flush(run, run_speaker)
+                run, run_speaker = [], None
+            run.append(word)
+            run_speaker = run_speaker or speaker
+        if run:
+            flush(run, run_speaker)
+    return out, speakers
+
 
 def transcribe_file(
     audio_path: Path,
@@ -31,6 +144,7 @@ def transcribe_file(
     args: argparse.Namespace,
     info_prefix: str = "",
     file_progress: tuple[int, int] | None = None,
+    diarizer=None,
 ) -> bool:
     """Transcribe a single audio file. Returns True on success."""
     logger.info("\n%sInput:  %s", info_prefix, audio_path)
@@ -41,13 +155,21 @@ def transcribe_file(
     start_time = time.time()
     use_vad = not args.no_vad
 
-    segments_iter, info = model.transcribe(
-        str(audio_path),
+    audio = decode_audio(str(audio_path))
+    options = dict(
         beam_size=args.beam_size,
-        vad_filter=use_vad,
         language=args.language,
-        word_timestamps=getattr(args, "word_timestamps", False),
+        # speaker labels are assigned per word, so diarizing needs word timestamps
+        word_timestamps=getattr(args, "word_timestamps", False) or diarizer is not None,
     )
+    if use_vad:
+        # Batched needs VAD to cut the audio into chunks. without_timestamps=False keeps
+        # sentence-sized segments (default batched output is one ~30 s segment per chunk).
+        segments_iter, info = BatchedInferencePipeline(model).transcribe(
+            audio, batch_size=BATCH_SIZE, without_timestamps=False, **options
+        )
+    else:
+        segments_iter, info = model.transcribe(audio, vad_filter=False, **options)
 
     segments: list = []
     try:
@@ -75,11 +197,20 @@ def transcribe_file(
         logger.warning("No transcript text was produced.")
         return False
 
-    write_txt(segments, txt_path)
+    speakers = None
+    if diarizer:
+        _spinner = spinner_start("Identifying speakers…")
+        try:
+            segments, speakers = split_by_speaker(segments, speaker_turns(diarizer, audio))
+        finally:
+            spinner_stop(_spinner)
+        logger.info("%sSpeakers: %d", info_prefix, len({s for s in speakers if s}))
+
+    write_txt(segments, txt_path, speakers)
     if srt_path:
-        write_srt(segments, srt_path)
+        write_srt(segments, srt_path, speakers)
     if json_path:
-        write_json(segments, info, json_path)
+        write_json(segments, info, json_path, speakers)
 
     elapsed = time.time() - start_time
     logger.info("Language: %s (%.2f) | %.1fs", info.language, info.language_probability, elapsed)
@@ -103,12 +234,7 @@ def run_project_workflow(urls: list[str], args: argparse.Namespace, project_root
     logger.info("\nProject folder: %s", project_dir)
     logger.info("Videos to process: %d", len(urls))
 
-    _spinner = spinner_start(f"Loading model {args.model}…")
-    try:
-        model = WhisperModel(args.model, device=device, compute_type=compute_type)
-    finally:
-        spinner_stop(_spinner)
-    logger.info("Device: %s | Compute type: %s", device, compute_type)
+    model, diarizer = _load_models(args, device, compute_type)
 
     successes = 0
     failures = 0
@@ -158,6 +284,7 @@ def run_project_workflow(urls: list[str], args: argparse.Namespace, project_root
                 args,
                 info_prefix="  ",
                 file_progress=(i, len(urls)),
+                diarizer=diarizer,
             )
             if ok:
                 successes += 1
@@ -201,12 +328,7 @@ def run_multi_file_workflow(raw_paths: list[str], args: argparse.Namespace) -> i
 
     logger.info("\nFiles to process: %d", len(paths))
 
-    _spinner = spinner_start(f"Loading model {args.model}…")
-    try:
-        model = WhisperModel(args.model, device=device, compute_type=compute_type)
-    finally:
-        spinner_stop(_spinner)
-    logger.info("Device: %s | Compute type: %s", device, compute_type)
+    model, diarizer = _load_models(args, device, compute_type)
 
     output_dir_override = Path(args.output_dir).expanduser() if args.output_dir else None
     if output_dir_override:
@@ -243,6 +365,7 @@ def run_multi_file_workflow(raw_paths: list[str], args: argparse.Namespace) -> i
                 args,
                 info_prefix="  ",
                 file_progress=(i, len(paths)),
+                diarizer=diarizer,
             )
             if ok:
                 successes += 1
@@ -291,15 +414,12 @@ def run_single_file_workflow(raw_path: str | None, args: argparse.Namespace) -> 
     json_path = (output_dir / f"{audio_path.stem}.json") if getattr(args, "json", False) else None
 
     logger.info("")
-    _spinner = spinner_start(f"Loading model {args.model}…")
-    try:
-        model = WhisperModel(args.model, device=device, compute_type=compute_type)
-    finally:
-        spinner_stop(_spinner)
-    logger.info("Device: %s | Compute type: %s", device, compute_type)
+    model, diarizer = _load_models(args, device, compute_type)
 
     try:
-        ok = transcribe_file(audio_path, txt_path, srt_path, json_path, model, args)
+        ok = transcribe_file(
+            audio_path, txt_path, srt_path, json_path, model, args, diarizer=diarizer
+        )
         if ok and args.cleanup:
             audio_path.unlink()
             logger.info("Deleted: %s", audio_path)
