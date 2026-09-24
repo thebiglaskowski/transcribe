@@ -239,7 +239,9 @@ def transcribe_file(
 
 # Known failure → what to do about it. Matched against the lowercased error text.
 _ERROR_HINTS = [
-    ("confirm your age", "🔞 age-restricted: needs cookies from a browser signed in to YouTube"),
+    ("confirm your age", "🔞 age-restricted: needs YouTube cookies (see README)"),
+    ("content is age-restricted", "🔞 needs an age-verified account and fresh cookies"),
+    ("page needs to be reloaded", "🍪 YouTube rejected the cookies: re-export or drop them"),
     ("not a bot", "🤖 YouTube bot check: sign in via cookies, or pause and re-run later"),
     ("403", "if this keeps happening: uv tool upgrade transcribe"),
     ("cudnn", "check the [cuda] extra, or try --device cpu"),
@@ -305,11 +307,30 @@ def _is_done(project_dir: Path, stem: str, args: argparse.Namespace) -> bool:
     return all(p is None or (p.exists() and p.stat().st_size > 0) for p in (txt, js))
 
 
+# Failures that belong to one video, not to the run — they never trip the stop below.
+_PER_VIDEO_ERRORS = (
+    "age-restricted",
+    "confirm your age",
+    "private video",
+    "video unavailable",
+    "members-only",
+    "premiere",
+)
+STOP_AFTER_SAME_FAILURES = 5
+
+
 def _process_project(
     project_dir: Path, pending: list[dict], args: argparse.Namespace, model, diarizer, cookies
-) -> tuple[int, int]:
-    """Download + transcribe each pending video into project_dir. Returns (succeeded, failed)."""
+) -> tuple[int, int, bool]:
+    """Download + transcribe each pending video into project_dir.
+
+    Returns (succeeded, failed, stopped). Stops early when STOP_AFTER_SAME_FAILURES downloads in
+    a row fail with the same run-wide error (bad cookies, bot check): racing through hundreds of
+    doomed downloads buries the cause and keeps hammering YouTube. Nothing is lost by stopping —
+    failed videos have no transcript, so a re-run retries them.
+    """
     successes = failures = 0
+    streak: list[str] = []  # consecutive run-wide download errors
     with tracker(project_dir.name, len(pending)) as t:
         for v in pending:
             title = v["title"] or v["url"]
@@ -325,10 +346,22 @@ def _process_project(
                 )
             except Exception as exc:
                 logger.debug("Download error in full: %s", exc)
-                logger.error("%s — download failed: %s", display(title), short_error(exc))
+                message = short_error(exc)
+                logger.error("%s — download failed: %s", display(title), message)
                 failures += 1
                 t.advance()
+                if not any(k in message.lower() for k in _PER_VIDEO_ERRORS):
+                    streak.append(message)
+                    last = streak[-STOP_AFTER_SAME_FAILURES:]
+                    if len(last) == STOP_AFTER_SAME_FAILURES and len(set(last)) == 1:
+                        logger.error(
+                            "Stopping: the last %d downloads all failed the same way. Fix that and "
+                            "re-run — finished videos are kept and skipped.",
+                            STOP_AFTER_SAME_FAILURES,
+                        )
+                        return successes, failures, True
                 continue
+            streak.clear()
             try:
                 summary = transcribe_file(
                     audio_path,
@@ -351,7 +384,7 @@ def _process_project(
                 logger.error("%s — transcription failed: %s", display(title), short_error(exc))
                 failures += 1
             t.advance()
-    return successes, failures
+    return successes, failures, False
 
 
 def run_project_workflow(urls: list[str], args: argparse.Namespace, project_root: Path) -> int:
@@ -413,9 +446,11 @@ def run_project_workflow(urls: list[str], args: argparse.Namespace, project_root
                 "\n📺 ", (project_dir.name, "bold magenta"), (f"  {len(pending)} videos", "dim")
             )
         )
-        ok, failed = _process_project(project_dir, pending, args, model, diarizer, cookies)
+        ok, failed, stopped = _process_project(project_dir, pending, args, model, diarizer, cookies)
         successes += ok
         failures += failed
+        if stopped:  # cookies / bot checks affect every project, not just this one
+            break
 
     logger.info(_summary_line(successes, failures, started))
     for project_dir, _ in projects:

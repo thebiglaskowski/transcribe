@@ -286,6 +286,28 @@ If browser cookie extraction fails (e.g. in headless environments), export a `co
 from your browser using an extension like [Get cookies.txt LOCALLY](https://github.com/kairi003/Get-cookies.txt-LOCALLY)
 and pass it with `--cookies ~/cookies.txt`.
 
+**Under WSL**, `chrome` means a Chrome installed *inside* WSL — not your Windows Chrome — and
+it is usually not signed in to YouTube, so it passes no useful cookies.
+
+### Age-restricted videos / "The page needs to be reloaded"
+
+Age-restricted videos need cookies from a signed-in, **age-verified** YouTube account. Cookies
+are also easy to get wrong in a way that breaks *every* video: YouTube rotates the session of
+an exported browser tab you keep using, and yt-dlp's copy then fails with **"The page needs to
+be reloaded"** — even on videos that download fine with no cookies at all. Export them the way
+[yt-dlp recommends](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies)
+so the session is never used again:
+
+1. Open a **private/incognito** window and sign in to YouTube (a secondary account is wise —
+   Google can flag accounts that download in bulk).
+2. In that same tab, go to `https://www.youtube.com/robots.txt`.
+3. Export `youtube.com` cookies with the extension above, then **close the private window**.
+4. Point `cookies_file` at the export in `~/.config/transcribe/config.toml`.
+
+Check one age-restricted video before a long run. If downloads start failing with "The page
+needs to be reloaded", remove `cookies_file` — the run stops by itself after 5 identical
+failures in a row, and a re-run picks up where it left off.
+
 ### `libcublas.so.12 is not found`
 
 The `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` wheels are missing from your install (they live in the optional `[cuda]` extra). Reinstall with the GPU extra:

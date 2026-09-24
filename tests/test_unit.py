@@ -552,8 +552,7 @@ def test_short_error_trims_ytdlp_preamble_and_adds_hint():
         " Use --cookies-from-browser or --cookies for the authentication. See https://github.com/yt-dlp/...\nmore"
     )
     assert short_error(age) == (
-        "Sign in to confirm your age · 🔞 age-restricted: needs cookies from a browser signed in"
-        " to YouTube"
+        "Sign in to confirm your age · 🔞 age-restricted: needs YouTube cookies (see README)"
     )
     assert short_error(ValueError("boom")) == "boom"
     assert short_error(ValueError()) == "ValueError"
@@ -569,3 +568,33 @@ def test_tracker_unmeasurable_step_clears_total(monkeypatch):
         t.stage("👥")  # speaker labels report no percentage
         item = next(task for task in t._progress.tasks if task.id == t._item)
         assert item.total is None and item.description == "👥 A"
+
+
+def _run_failing_project(monkeypatch, tmp_path, errors):
+    """Run _process_project where each download raises the next message from `errors`."""
+    import argparse
+
+    import transcribe.transcribe as tr
+
+    messages = iter(errors)
+
+    def fake_download(*a, **kw):
+        raise RuntimeError(f"ERROR: [youtube] abc: {next(messages)}")
+
+    monkeypatch.setattr(tr, "download_audio", fake_download)
+    _recording_console(monkeypatch)
+    videos = [{"title": f"v{i}", "url": "u", "stem": f"v{i}"} for i in range(len(errors))]
+    args = argparse.Namespace(srt=False, json=False, cleanup=False)
+    return tr._process_project(tmp_path, videos, args, None, None, {})
+
+
+def test_project_stops_after_repeated_run_wide_failures(monkeypatch, tmp_path):
+    errors = ["The page needs to be reloaded."] * 8
+    assert _run_failing_project(monkeypatch, tmp_path, errors) == (0, 5, True)
+
+
+def test_project_does_not_stop_for_per_video_failures(monkeypatch, tmp_path):
+    # age-restricted videos neither trip the stop nor break a run-wide streak
+    errors = ["Sorry, this content is age-restricted."] * 6
+    errors += ["The page needs to be reloaded.", "Sorry, this content is age-restricted."]
+    assert _run_failing_project(monkeypatch, tmp_path, errors) == (0, 8, False)
